@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 0: info",
+  "type": "object",
+  "required": ["type", "protocol_version"],
+  "properties": {
+    "type": {"const": "info"},
+    "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "name": {"type": "string"},
+    "vendor": {"type": "string"},
+    "model": {"type": "string"},
+    "serial": {"type": "string"},
+    "firmware_version": {"type": "string"},
+    "channels": {"type": "array", "items": {"type": "integer", "minimum": 0}}
+  }
+}
