@@ -141,6 +141,7 @@ class Connection(QuicConnectionProtocol):
         self._channels = {}     # stream_id -> channel id once the prefix is read
         self._incoming = {}     # channel -> stream_id currently open from the peer
         self._dead = set()      # streams we declined or reset; ignore further data
+        self._stopped = set()   # peer stopped our sending half; never write to it again
         self.peer_fingerprint = None
         self.connected = asyncio.get_event_loop().create_future()
 
@@ -153,6 +154,10 @@ class Connection(QuicConnectionProtocol):
         return stream_id
 
     def send(self, stream_id: int, msg) -> None:
+        # aioquic resets the sender before delivering STOP_SENDING. Optional
+        # channels may be declined without interrupting the other channels.
+        if stream_id in self._stopped:
+            return
         self._quic.send_stream_data(stream_id, frame(msg))
         self.transmit()
 
@@ -222,6 +227,7 @@ class Connection(QuicConnectionProtocol):
             if event.end_stream:
                 self._close_incoming(sid)
         elif isinstance(event, StopSendingReceived):
+            self._stopped.add(event.stream_id)
             self.on_declined(self._channels.get(event.stream_id), event.stream_id, event.error_code)
 
     async def _keep_alive(self):
