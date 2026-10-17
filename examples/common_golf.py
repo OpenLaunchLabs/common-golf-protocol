@@ -16,7 +16,7 @@ from aioquic.asyncio import connect, serve
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import QuicConnection
-from aioquic.quic.events import HandshakeCompleted, StopSendingReceived, StreamDataReceived
+from aioquic.quic.events import HandshakeCompleted, StopSendingReceived, StreamDataReceived, StreamReset
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -30,7 +30,7 @@ PROTOCOL_VERSION = "0.1.0"
 CHANNEL = {"info": 0, "shot": 1, "open_connect": 2, "club": 3, "status": 4,
            "control": 5, "state": 6, "result": 7, "flight": 8}
 NOT_INTERESTED = 1  # STOP_SENDING code: "I do not read this channel"
-MALFORMED = 2       # RESET_STREAM code: bad length, bad JSON, FIN inside a frame
+MALFORMED = 2       # STOP_SENDING code: bad length, bad JSON, FIN inside a frame
 MAX_MESSAGE_BYTES = 65535  # ceiling for channels 0-8; private channels choose their own
 IDLE_TIMEOUT_SECONDS = 90.0  # spec floor is 60; minutes pass between shots
 KEEP_ALIVE_SECONDS = 15.0    # QUIC PING; aioquic has no built-in keep-alive
@@ -173,9 +173,10 @@ class Connection(QuicConnectionProtocol):
         self._close_incoming(stream_id)
         self.transmit()
 
-    def reset(self, stream_id: int) -> None:
+    def reset(self, stream_id: int, *, ended=False) -> None:
         """Code 2: peer sent something unparseable. Drop the stream, keep the connection."""
-        self._quic.stop_stream(stream_id, MALFORMED)
+        if not ended:
+            self._quic.stop_stream(stream_id, MALFORMED)
         self._close_incoming(stream_id)
         self.transmit()
 
@@ -203,6 +204,8 @@ class Connection(QuicConnectionProtocol):
             buf += event.data
             if sid not in self._channels:
                 if len(buf) < 4:
+                    if event.end_stream:
+                        self.reset(sid, ended=True)
                     return
                 channel = struct.unpack(">I", buf[:4])[0]
                 del buf[:4]
@@ -221,14 +224,16 @@ class Connection(QuicConnectionProtocol):
                 if event.end_stream and buf:
                     raise ValueError("stream ended inside a frame")
             except ValueError as e:
-                print(f"[common_golf] malformed on channel {channel}: {e}; stopping stream")
-                self.reset(sid)
+                print(f"[common_golf] malformed on channel {channel}: {e}; discarding stream")
+                self.reset(sid, ended=event.end_stream)
                 return
             if event.end_stream:
                 self._close_incoming(sid)
         elif isinstance(event, StopSendingReceived):
             self._stopped.add(event.stream_id)
             self.on_declined(self._channels.get(event.stream_id), event.stream_id, event.error_code)
+        elif isinstance(event, StreamReset):
+            self._close_incoming(event.stream_id)
 
     async def _keep_alive(self):
         while not self._closed.is_set():
