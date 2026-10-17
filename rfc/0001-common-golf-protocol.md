@@ -4,7 +4,7 @@
 |---|---|
 | Document | 0001 |
 | Status | Draft 1 |
-| Protocol version | 0.1.0 |
+| Protocol version | 0.1.1 |
 | ALPN | `common-golf/draft-1` |
 | Service type | `_common-golf._udp` |
 | Date | 2026-10-11 |
@@ -346,13 +346,13 @@ The first message each side sends, on the first stream it opens. Required.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `protocol_version` | string | yes | Semver of this document, `0.1.0` |
+| `protocol_version` | string | yes | Semver of this document, `0.1.1` |
 | `name` | string | | Display name |
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
 
 ```json
-{"type": "info", "protocol_version": "0.1.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
+{"type": "info", "protocol_version": "0.1.1", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
 ```
 
 ### 5.1 Channel 1: `shot`

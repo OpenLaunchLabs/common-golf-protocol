@@ -26,7 +26,7 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZerocon
 
 ALPN = "common-golf/draft-1"  # each draft has its own; becomes common-golf/1 at 1.0
 SERVICE = "_common-golf._udp.local."
-PROTOCOL_VERSION = "0.1.0"
+PROTOCOL_VERSION = "0.1.1"
 CHANNEL = {"info": 0, "shot": 1, "open_connect": 2, "club": 3, "status": 4,
            "control": 5, "state": 6, "result": 7, "flight": 8}
 NOT_INTERESTED = 1  # STOP_SENDING code: "I do not read this channel"
