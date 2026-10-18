@@ -27,6 +27,12 @@
     "face_impact_horizontal_millimeters": {"type": "number"},
     "face_impact_vertical_millimeters": {"type": "number"},
     "closure_rate_degrees_per_second": {"type": "number"},
+    "estimated": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Numeric fields the device could not measure for this shot, or believes to have reduced accuracy. A sender MUST name only fields present in the message. A receiver ignores any other name",
+      "items": {"type": "string"}
+    },
     "player_dexterity": {"enum": ["right", "left", "unknown"]},
     "final": {"type": "boolean"}
   }
