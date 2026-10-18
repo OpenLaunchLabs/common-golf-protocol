@@ -53,10 +53,12 @@ declined with the rule above that it did not meet.
 
 The spec changes only at draft boundaries, roughly every six to eight
 weeks. Between drafts the answer to everything is "open an issue, it will
-be looked at for the next cut." Each draft ships with a changelog naming
-the issues it resolved. A draft that changes the wire gets its own ALPN
-string (`common-golf/draft-2`), so peers on different drafts fail at the
-handshake instead of mid-stream.
+be looked at for the next cut." A change that is not additive, one that
+removes or renames a field or channel or changes a meaning, gets its own
+ALPN string (`common-golf/draft-2`), so peers on different strings fail at
+the handshake instead of mid-stream. Adding an optional field or channel
+does not. Every string has a row in section 3.8 of the RFC saying why it
+moved and which issues it resolved.
 
 ## Pull requests
 

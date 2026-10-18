@@ -24,9 +24,9 @@ from cryptography.x509.oid import NameOID
 from zeroconf import IPVersion, ServiceInfo, ServiceListener
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
-ALPN = "common-golf/draft-1"  # each draft has its own; becomes common-golf/1 at 1.0
+ALPN = "common-golf/draft-2"  # each draft has its own; becomes common-golf/1 at 1.0
 SERVICE = "_common-golf._udp.local."
-PROTOCOL_VERSION = "0.1.1"
+PROTOCOL_VERSION = "0.2.0"
 CHANNEL = {"info": 0, "shot": 1, "open_connect": 2, "club": 3, "status": 4,
            "control": 5, "state": 6, "result": 7, "flight": 8}
 NOT_INTERESTED = 1  # STOP_SENDING code: "I do not read this channel"
