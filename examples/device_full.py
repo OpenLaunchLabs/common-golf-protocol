@@ -60,8 +60,10 @@ class Device(cg.Connection):
                     "ball_speed_meters_per_second": speed,
                     "vertical_launch_angle_degrees": round(random.uniform(10, 14), 1),
                     "horizontal_launch_angle_degrees": hla}
-            # Preliminary: launch numbers only, spin not yet resolved.
-            self.send(self.shots, {**base, "final": False, "reduced_accuracy": True})
+            # Preliminary: launch numbers plus a placeholder spin, named in `estimated`.
+            self.send(self.shots, {**base, "final": False,
+                                   "total_spin_revolutions_per_minute": 2700, "spin_axis_degrees": 0,
+                                   "estimated": ["total_spin_revolutions_per_minute", "spin_axis_degrees"]})
             await asyncio.sleep(0.3)
             # Final: same shot_number, spin added. Replaces the preliminary whole; nothing is merged.
             self.send(self.shots, {**base, "final": True,

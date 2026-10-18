@@ -373,7 +373,7 @@ here; that is channel 8.
 | `measured_at_nanoseconds` | integer | | Nanoseconds since an unspecified epoch; monotonic is fine |
 | `player_dexterity` | `right`, `left`, `unknown` | | See section 7 |
 | `tee_position` | `tee`, `mat`, `ground`, `unknown` | | Where the ball was struck from |
-| `reduced_accuracy` | boolean | | The device is less confident than usual |
+| `estimated` | array of string | | Names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy. See section 7 |
 | `final` | boolean | | See below. Absent means final |
 | `shot_kind` | `full`, `putt`, `chip` | | |
 
@@ -469,6 +469,7 @@ ball data, such as a swing-speed radar.
 | `face_impact_horizontal_millimeters`, `face_impact_vertical_millimeters` | Positive is toe and up |
 | `closure_rate_degrees_per_second` | |
 | `player_dexterity` | See section 7 |
+| `estimated` | As on channel 1: names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy |
 | `final` | As on channel 1: each message for a `shot_number` replaces the previous one whole |
 
 ```json
@@ -555,7 +556,7 @@ either success or failure.
 
 The device's own computed ball flight, when it offers one. Kept apart from
 channel 1 so a simulator that runs its own physics never confuses a
-measurement with an estimate. `shot_number` required, rest optional.
+measurement with a derived value. `shot_number` required, rest optional.
 
 | Field |
 |---|
@@ -615,6 +616,16 @@ wire never carries two handed variants of a number.
 
 Timestamps are nanoseconds since an epoch the sender does not have to
 define. Monotonic since boot is fine.
+
+A device that could not measure a value for this shot and sends one
+anyway, or that believes a value it sends has reduced accuracy, MUST name
+that field in `estimated`, on channels 1 and 3. This is the number a
+launch monitor shows in italics: indoor spin without a marked ball, a face
+angle inferred from path and spin. A sender MUST name only fields present
+in the message; a receiver ignores any other name. A consumer SHOULD
+present estimated values distinctly. A value
+computed exactly from fields that are themselves measured is not
+estimated; it is derived.
 
 ## 8. Compatibility with what exists
 
