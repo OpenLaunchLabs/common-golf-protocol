@@ -69,9 +69,13 @@ class Sim(cg.Connection):
 
 
 async def attach(name, ip, port):
-    async with cg.dial(ip, port, "example-sim", lambda *a, **k: Sim(*a, device=name, **k)) as conn:
-        await conn.connected
-        await conn.wait_closed()
+    try:
+        async with cg.dial(ip, port, "example-sim", lambda *a, **k: Sim(*a, device=name, **k)) as conn:
+            await conn.connected
+            await conn.wait_closed()
+    except ConnectionError:
+        # No shared ALPN string is the usual cause: the peer speaks another draft (section 3.8).
+        print(f"[sim] {name}: handshake failed; it does not speak {cg.ALPN}")
 
 
 async def main():

@@ -6,7 +6,7 @@ Discovery instead of IP addresses. Encrypted and authenticated by the
 transport, so no application-level crypto. Channels work like topics: one
 owner, one direction, no acknowledgements.
 
-Status: draft 1. Everything here is provisional.
+Status: draft 2. Everything here is provisional.
 
 ## Run the examples first
 

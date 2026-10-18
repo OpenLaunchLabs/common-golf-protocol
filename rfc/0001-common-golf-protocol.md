@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | Document | 0001 |
-| Status | Draft 1 |
-| Protocol version | 0.1.1 |
-| ALPN | `common-golf/draft-1` |
+| Status | Draft 2 |
+| Protocol version | 0.2.0 |
+| ALPN | `common-golf/draft-2` |
 | Service type | `_common-golf._udp` |
-| Date | 2026-10-11 |
+| Date | 2026-10-17 |
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be read as
 in RFC 2119. Everything else is explanation.
@@ -46,7 +46,7 @@ language.
   That public key identifies the holder. This document uses nothing else
   for identity.
 - **Version negotiation is built in.** The connector names the application
-  protocol in the handshake (ALPN). `common-golf/draft-1` is this draft;
+  protocol in the handshake (ALPN). `common-golf/draft-2` is this draft;
   section 3.8 says how that changes.
 - **Streams are cheap and independent.** One connection carries many
   streams. Each is reliable and ordered like a TCP socket, but a slow or
@@ -238,6 +238,15 @@ each draft has its own string, `common-golf/draft-1`, `common-golf/draft-2`,
 and drafts MAY break each other. Two peers on different drafts fail the
 QUIC handshake, which is the intended failure: nothing half-works.
 
+The string moves only for a change that is not additive: a field or
+channel removed or renamed, or a meaning changed. Adding an optional field
+or a channel does not move it. Every string so far, and why it moved:
+
+| ALPN | Protocol versions | Date | Why |
+|---|---|---|---|
+| `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
+| `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
+
 At 1.0 the string becomes `common-golf/1`. From then on every change under
 that string is additive: new optional fields, new channels. The rules that
 receivers ignore unknown fields and decline unknown channels make that safe
@@ -346,13 +355,13 @@ The first message each side sends, on the first stream it opens. Required.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `protocol_version` | string | yes | Semver of this document, `0.1.1` |
+| `protocol_version` | string | yes | Semver of this document, `0.2.0` |
 | `name` | string | | Display name |
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
 
 ```json
-{"type": "info", "protocol_version": "0.1.1", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
+{"type": "info", "protocol_version": "0.2.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
 ```
 
 ### 5.1 Channel 1: `shot`
