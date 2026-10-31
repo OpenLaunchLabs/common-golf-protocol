@@ -1,278 +1,180 @@
-# ESP32 Common Golf Protocol demo
+# ESP32 demo
 
-Flash one of three roles onto each ESP-WROOM-32 development board. The CP2102
-is the USB-to-serial adapter; select the **original `esp32` target**, not C3 or
-S3. No sensors, buttons, display, or wiring between boards are required.
+Firmware for ESP-WROOM-32 boards (original `esp32` target, not C3 or S3) built
+on the [C library](../../implementations/c/README.md). Each board runs one
+role. No sensors, buttons, or wiring are needed.
 
-This runs real QUIC with TLS 1.3 and Ed25519 identities, using ALPN
-`common-golf/draft-2` and protocol version `0.2.0`. Devices advertise
-`_common-golf._udp` on an ephemeral port; the simulator discovers and connects
-to them automatically. By default, the simulator selects only devices whose
-mDNS `vendor` is exactly `Common Golf example`, `CGP hardware test`, or `Example`.
-This keeps unrelated launch monitors on the same network out of the demo. To
-include other discovered devices, disable **Only connect to demo/example
-devices** in the simulator's menuconfig. This selects devices; it does not
-establish trust. All connected peers default to makers.
+Devices advertise `_common-golf._udp` on an ephemeral port; the simulator
+discovers them and connects over QUIC/TLS 1.3 with Ed25519 identities. The
+default is draft 2 (`common-golf/draft-2`, 0.2.0); the `CGP_DRAFT` menuconfig
+option selects draft 1. Every peer on a connection must use the same draft.
 
 | Role | Sends | Receives | Behavior |
 |---|---|---|---|
-| `launch_monitor` | 0 info, 1 shot, 3 club, 4 status, 8 flight | 0 info, 6 state, 7 result | Synthetic shot every 3–7 seconds; generated measurements are marked `estimated`. |
-| `control_box` | 0 info, 5 control | 0 info, 6 state, 7 result | Random command every 0.5–3 seconds, including arrows and all standard commands. Arrow holds pair `down` with `up` after 100–500 ms. |
-| `simulator` | 0 info, 6 state, 7 result | 0 info, 1 shot, 3 club, 4 status, 5 control, 8 flight | Connects to both devices, prints received JSON, and publishes illustrative shot results. |
+| `launch_monitor` | 0 info, 1 shot, 3 club, 4 status, 8 flight | 0 info, 6 state, 7 result | Synthetic shot every 3–7 s, marked `estimated` (`reduced_accuracy` on draft 1). |
+| `control_box` | 0 info, 5 control | 0 info, 6 state, 7 result | Random command every 0.5–3 s. Arrow holds send `down`, then `up` 100–500 ms later. |
+| `simulator` | 0 info, 6 state, 7 result | 0 info, 1 shot, 3 club, 4 status, 5 control, 8 flight | Connects to both devices, logs received JSON, and returns placeholder shot results. |
 
-Together the roles exercise all native standard channels. Optional channel 2
-(GSPro Open Connect compatibility), reserved channels, and private channels are
-declined with `not_interested`; no shot is sent twice through compatibility.
-The simulator logs controls; it does not render a game or inject computer keys.
-The flight and result numbers are demonstration values, not ball physics.
+Channel 2 (Open Connect), reserved channels, and private channels are declined
+with `not_interested`. Flight and result values are placeholders, not ball
+physics.
 
-## Build and flash three boards
+By default the simulator connects only to devices whose mDNS `vendor` is
+`Common Golf example`, `CGP hardware test`, or `Example`, so it ignores real
+launch monitors on the network. Turn off **Only connect to demo/example
+devices** in menuconfig to remove this filter. The filter doesn't affect trust:
+every peer is `maker`.
 
-Use three USB data cables and a shared **2.4 GHz Wi-Fi network** that permits
-multicast and traffic between clients. Guest Wi-Fi/client isolation can prevent
-discovery. CP2102 ports commonly appear as `/dev/cu.SLAB_USBtoUART` on macOS,
-`/dev/ttyUSB0` on Linux, or a COM port on Windows. Install the board's CP210x
-VCP driver if no serial port appears.
+## Build and flash
 
-Install [ESP-IDF 5.4.2](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32/get-started/index.html)
-with its prerequisites. For a new command-line installation on macOS/Linux:
+You need three USB data cables and a 2.4 GHz Wi-Fi network that allows
+multicast and client-to-client traffic (guest networks often don't). CP2102
+boards usually appear as `/dev/cu.SLAB_USBtoUART` (macOS), `/dev/ttyUSB0`
+(Linux), or a COM port (Windows); install the CP210x driver if none appears.
+
+Install [ESP-IDF 5.4.2](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32/get-started/index.html):
 
 ```sh
 git clone --branch v5.4.2 --recursive https://github.com/espressif/esp-idf.git ~/esp-idf-v5.4.2
 cd ~/esp-idf-v5.4.2
 ./install.sh esp32
-. ./export.sh
+. ./export.sh   # in every new terminal
 ```
 
-In each new terminal, source that `export.sh` before using `idf.py`. The wrapper
-below is a Bash script; Windows users can use a Bash-capable ESP-IDF environment.
-
-From this directory (`examples/esp32`):
+From `examples/esp32`, for each role (`launch_monitor`, `control_box`,
+`simulator`):
 
 ```sh
-python3 scripts/fetch_deps.py
+python3 scripts/fetch_deps.py            # once
 ./scripts/build.sh launch_monitor menuconfig
 ./scripts/build.sh launch_monitor build
 ./scripts/build.sh launch_monitor -p /dev/cu.SLAB_USBtoUART flash monitor
 ```
 
-In **Common Golf Protocol demo**, enter the Wi-Fi SSID and password. Keep the
-launch monitor role selected for the first board. Replace the example serial
-port with the board's actual port. Exit the monitor with **Ctrl+]**. If flashing
-stalls at “Connecting,” hold BOOT while the tool connects, then release it.
+In menuconfig, open **Common Golf Protocol demo** and enter the Wi-Fi SSID and
+password. Firmware with an empty SSID stops at boot. Exit the serial monitor
+with **Ctrl+]**. If flashing hangs at "Connecting", hold BOOT until it
+connects. `build.sh` is a Bash script.
 
-Repeat for the other two boards using their ports:
+Each role has its own `sdkconfig.<role>` and `build-<role>/`, both ignored by
+Git. They contain the Wi-Fi password, so don't publish them. Don't change the
+role after the first configuration.
 
-```sh
-./scripts/build.sh control_box menuconfig
-./scripts/build.sh control_box build
-./scripts/build.sh control_box -p /dev/cu.SLAB_USBtoUART flash monitor
+Defaults: 240 MHz, 4 MB DIO flash, 2 MiB app partition, no OTA, no PSRAM,
+two connections per board (up to four in menuconfig). Images are about 1.08 MiB.
 
-./scripts/build.sh simulator menuconfig
-./scripts/build.sh simulator build
-./scripts/build.sh simulator -p /dev/cu.SLAB_USBtoUART flash monitor
-```
+The Ed25519 identity is generated on first boot and stored in NVS, so it
+survives reflashing. `./scripts/build.sh <role> -p <port> erase-flash` deletes
+it and the board gets a new fingerprint.
 
-Enter the same Wi-Fi credentials for **each** role. Profiles select the role on
-first configuration; avoid changing the role choice afterward. Each profile has
-its own ignored `sdkconfig.<role>` and `build-<role>/`. Configuration files and
-firmware binaries contain the Wi-Fi credentials; do not publish them. A build
-with an empty SSID prints a configuration reminder and stops at boot.
+## What to expect
 
-The defaults use 240 MHz, 4 MB DIO flash, a 2 MiB application partition, and no
-PSRAM. Two simultaneous connections are enabled by default on every role; the
-menu permits up to four for further measurement. There is no OTA partition.
+The simulator logs `CONNECTED` for each device, then `RX` lines with received
+JSON. Devices log incoming state and results. Service names include a
+MAC-derived serial number.
 
-An Ed25519 identity is generated on first use and saved in NVS. Normal reflashing
-preserves it. Erasing flash, including to recover from an NVS initialization
-error, removes that identity and changes the fingerprint. If that reset is
-intended, run `./scripts/build.sh <role> -p <port> erase-flash`, then flash again.
+Every 10 seconds, a `resources` line reports connected peers, free and minimum
+internal heap, the largest free block, main-task stack headroom, and Wi-Fi
+RSSI, all in bytes. Logs also include transport message counts, queued bytes,
+and handshake times. `./scripts/build.sh <role> size` reports static flash and
+RAM use only.
 
-## Measure the boards
+The transport sends QUIC PINGs every 15 seconds with a 90-second idle timeout.
+The simulator rediscovers devices about every 5 seconds; a stale connection can
+hold its slot until the idle timeout expires.
 
-The simulator should print `CONNECTED` for both devices, followed by `RX` JSON
-for their channels. Device serial output should show incoming simulator state
-and shot results. Names include the board's MAC-derived serial so multiple
-copies can be distinguished.
+### Hardware checklist
 
-Every ten seconds, `resources` reports connected peers, free/minimum internal
-heap, largest free allocation, main-task stack headroom, and Wi-Fi RSSI.
-Transport statistics include message counts and queued bytes; connection logs
-include handshake time. All memory values are bytes. Record these after startup,
-after the first connection, and with both connections active. `./scripts/build.sh <role> size` reports static flash/RAM
-usage; it does not measure live QUIC/TLS heap requirements.
+1. With all three boards powered, the simulator holds both connections and
+   receives shots, club, status, flight, and control; the launch monitor
+   receives state and results.
+2. Over at least 15 minutes, there are no resets, failed handshakes, or
+   dropped connections, and free heap doesn't trend down. Record minimum heap,
+   largest free block, and stack headroom.
+3. After power-cycling a device, it reconnects with the same fingerprint. After
+   restarting Wi-Fi, both connections recover.
+4. A device serves two simulators at once (a fourth board, or `examples/sim.py`
+   on the same network). Measure heap before raising the peer limit.
 
-For a useful hardware demonstration:
+## Measurements
 
-1. Power all three boards and verify the simulator maintains two connections
-   while receiving shots, club/status/flight data, and controls. Verify the
-   launch monitor receives state and results.
-2. Capture at least 15 minutes of serial output. Check for resets, failed
-   handshakes, dropped connections, and declining free heap. Record minimum
-   heap, largest free block, and stack headroom, not just the initial free heap.
-3. Power-cycle a device. Discovery repeats approximately every five seconds;
-   an old connection may occupy its slot until the 90-second QUIC timeout.
-   Verify automatic reconnection and the same persisted identity fingerprint.
-   Restart Wi-Fi and check that both connections recover too.
-4. To test a listener with two simulators, use a fourth board or the repository's
-   Python `examples/sim.py` on the same network. Check both receive shots without
-   disconnecting each other. Increase the peer limit only after measuring heap.
+One ESP32-D0WD-V3 (rev 3.1) board, 240 MHz, 4 MB flash, no PSRAM, reflashed for
+each role and connected over Wi-Fi to two Python peers. These are short runs,
+not soak tests.
 
-The transport uses QUIC PING keep-alives every 15 seconds and a 90-second idle
-timeout. The regular mock traffic already prevents most idle periods; the
-one-board harness below can pause simulator fixture traffic for an idle test.
-No application heartbeat or manual address entry is used by the firmware.
-
-All three roles have been cross-compiled for the original ESP32. Images are
-approximately **1.08 MiB**, leaving about 46% of the 2 MiB app partition free.
-
-## Hardware measurements
-
-Tested on **2026-10-25** with one ESP32-D0WD-V3 revision 3.1 board, 4 MB flash,
-240 MHz, and no PSRAM. The board was reflashed between roles and communicated
-with Python peers over Wi-Fi. Each measured role held two simultaneous QUIC
-connections; this was not a run with three physical boards.
-
-| Role | Observation | Free heap with two peers | Minimum heap since boot | Minimum main-task stack headroom |
+| Role | Run | Free heap, two peers | Minimum heap | Minimum stack headroom |
 |---|---|---:|---:|---:|
-| Launch monitor | 120 seconds; 51 shot messages across two clients | 130,576–131,144 B | 40,928 B | 6,412 B |
-| Control box | 60 seconds; 71 control events across two clients | 131,712–131,716 B | 108,112 B | 6,604 B |
-| Simulator | 120 seconds; 54 shot/result pairs and 125 control events | 126,368–128,288 B | 100,908 B | 8,364 B |
+| Launch monitor | 120 s, 51 shots | 130,576–131,144 B | 40,928 B¹ | 6,412 B |
+| Control box | 60 s, 71 controls | 131,712–131,716 B | 108,112 B | 6,604 B |
+| Simulator | 120 s, 54 shot/result pairs, 125 controls | 126,368–128,288 B | 100,908 B | 8,364 B |
 
-The launch-monitor run also accepted a **65,535-byte** state JSON object while
-both clients were connected, then logged the following `putting` marker on the
-same stream. Its heap minimum includes that stress test. Control events included
-63 presses and four paired arrow holds; free heap returned to 205,456 bytes after
-disconnection. The simulator discovered both host fixtures, received channels
-0/1/3/4/5/8, and sent state and results. Its concurrent connection setup took
-2.521 and 4.318 seconds; free heap returned to 201,268 bytes after the fixtures
-closed. The board retained the same Ed25519 identity across all three role
-flashes. The observed traffic passed the repository JSON schemas.
+¹ Includes receiving a 65,535-byte state message during the run.
 
-A separate **115-second simulator run** passed with application traffic idle for
-97.927 seconds on the launch-monitor connection and 96.447 seconds on the
-control connection. QUIC PING kept both alive beyond the negotiated 90-second
-idle timeout, and both final PING checks succeeded. Minimum heap was 99,848 B,
-minimum stack headroom was 8,316 B, and free heap after fixture shutdown was
-201,272 B. Opening the CP2102 serial monitor reset the board before this run;
-automatic discovery after boot and the persisted identity were verified.
+Free heap returns to about 201–205 KB after peers disconnect. Handshakes take
+about 2.2 s for one connection and 2.5 s and 4.3 s for two concurrent ones. A
+simulator connection with 97 seconds of no application traffic stayed open on
+QUIC PINGs alone.
 
-The later CPU run also restarted both host fixtures without resetting the board.
-The simulator initially retried their old ports and logged two handshake
-timeouts, then discovered the new ports and reconnected automatically. The
-subsequent stress workload passed. This does not replace the Wi-Fi recovery
-and power-cycle tests above.
+CPU use with two connections, averaged over steady-state windows (handshakes
+excluded). Totals include Wi-Fi, logging, and instrumentation.
 
-These are short hardware runs. Complete the 15-minute soak and three-board
-procedure above before drawing conclusions about sustained operation or network
-recovery.
+| Workload | Payload logging | Core 0 | Core 1 | Whole chip |
+|---|---|---:|---:|---:|
+| Control box, random commands | On | 11.8% | 0.9% | 6.4% |
+| Simulator, idle | Off | 12.3% | 0.7% | 6.5% |
+| Simulator, 1 shot/2 s + 1 command/s | Off | 14.9% | 0.7% | 7.8% |
+| Simulator, same | On | 18.3% | 0.7% | 9.5% |
+| Simulator, 10 shots/s + 20 commands/s | Off | 63.7% | 1.2% | 32.5% |
 
-### CPU measurements
+Handshakes hold one core at 100% for their duration. Run time-sensitive work,
+such as button sampling, in a separate FreeRTOS task from the transport loop.
+The loop polls every 10 ms even when idle, so these figures describe this
+implementation, not a protocol minimum.
 
-Additional runs on the same 240 MHz, dual-core board used FreeRTOS runtime
-accounting with 64-bit ESP Timer counters. Each row below held two established
-QUIC connections. Values are duration-weighted averages of complete two-second
-windows, excluding startup and handshakes. They include Wi-Fi, the mock
-application, transport, and instrumentation; they are not isolated QUIC costs.
+## One-board testing
 
-| Workload | Payload logs | Measured window | Core 0 busy | Core 1 busy | Whole chip busy |
-|---|---|---:|---:|---:|---:|
-| Control box, random commands to two simulators | On | 42 s | 11.8% | 0.9% | **6.4%** |
-| Simulator, connected with application traffic paused | Off | 28 s | 12.3% | 0.7% | **6.5%** |
-| Simulator, one shot every 2 s and one command/s | Off | 18 s | 14.9% | 0.7% | **7.8%** |
-| Simulator, same normal workload | On | 20 s | 18.3% | 0.7% | **9.5%** |
-| Simulator, 10 shots/s and 20 commands/s | Off | 34 s | 63.7% | 1.2% | **32.5%** |
-
-The control run delivered 59 control events. The stress run achieved 9.990
-shots/s and 19.989 command starts/s, returned all 466 shot results, and sent
-1,088 control events (932 commands, with additional arrow releases). Both peers
-passed their final PING checks. The largest two-second whole-chip sample during
-the selected stress window was 33.8%. Free heap settled at 108,040 B during that
-window; its minimum since boot was 42,276 B. Profiling itself adds memory use.
-
-Connection setup is substantially heavier: one core reached 100% busy across
-two-second samples. The other core remained below 1% during those samples.
-Control-box handshakes took 2.200/2.202 s; concurrent simulator handshakes took
-approximately 2.5/4.3 s. Keep button sampling and time-sensitive application work
-in separate FreeRTOS tasks rather than the synchronous transport/handshake loop.
-The observed idle capacity supports other modest work, but does not establish
-latency guarantees for an additional workload.
-
-The current loop polls every 10 ms, including when no messages are ready. These
-numbers describe this implementation, not a minimum CPU requirement imposed by
-the protocol. The profiler task itself used about 0.44–0.47% of one core in these
-windows; IPC and runtime-accounting overhead are included elsewhere. ISR time
-is charged to the interrupted task, so these are scheduler estimates, not
-hardware instruction or cycle counts. Full window summaries and workload
-evidence are in [the CPU measurement record](measurements/cpu-2026-10-25.json).
-
-### Reproduce with one board
-
-From this directory, prepare a Python environment on a computer on the same
-multicast-capable Wi-Fi network:
+`tests/hardware_peer.py` stands in for the other boards from a computer on the
+same network:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -e ../../implementations/python
-```
 
-After flashing the corresponding role, run one of these commands. `probe`
-discovers the board and opens **two** simulator connections; `listen` advertises
-a fake launch monitor and control box for simulator firmware to discover.
-
-```sh
+# Launch monitor or control box firmware: open two simulator connections
 .venv/bin/python tests/hardware_peer.py probe --role launch-monitor --duration 120 --max-frame
 .venv/bin/python tests/hardware_peer.py probe --role control-box --duration 60
+
+# Simulator firmware: advertise a fake launch monitor and control box
 .venv/bin/python tests/hardware_peer.py listen --duration 120
+.venv/bin/python tests/hardware_peer.py listen --duration 115 --quiet-after 8   # idle test
 ```
 
-Keep the board's serial monitor open to capture the resource readings. With
-`--max-frame`, confirm the subsequent `"mode":"putting"` state appears in the
-board log; a successful host PING alone does not prove the payload was processed.
-If several matching boards are present, pass `--name` with the discovered service
-name. Stop other simulator clients before a probe so both connection slots are
-available. The harness prints a PASS/FAIL result and per-channel counts, and
-exits nonzero on failure. Its temporary identities do not change the board's
-NVS key.
+The harness prints PASS/FAIL with per-channel counts and exits nonzero on
+failure. Its identities are temporary and don't affect the board's key. Use
+`--name` to pick one of several boards, and stop other simulators first so both
+connection slots are free.
 
-For a simulator idle test, stop the previous harness and run:
+- `--max-frame` sends a 65,535-byte state message. Confirm the board then logs
+  the following `"mode":"putting"` state.
+- `--quiet-after N` stops application messages N seconds after connecting.
+  `application_idle_seconds` should exceed 90 with both connections still up.
+- Opening a CP2102 serial monitor resets the board. To test reconnection,
+  restart the harness while leaving the monitor open.
 
-```sh
-.venv/bin/python tests/hardware_peer.py listen --duration 115 --quiet-after 8
-```
+### CPU profiling
 
-This stops fixture application messages eight seconds after connection while
-keeping QUIC PING active. Check the reported `application_idle_seconds` exceeds
-90 for both peers and both connections remain live. For a separate live
-reconnection test, restart `listen` while keeping the existing serial monitor
-open: opening a new CP2102 monitor can reset the board. The CPU run exercised
-this restart, including the stale-port retry delay described above.
+1. In menuconfig, under **Component config → FreeRTOS → Kernel**, enable
+   `configGENERATE_RUN_TIME_STATS` and set `configRUN_TIME_COUNTER_TYPE` to
+   `uint64_t`.
+2. Under **FreeRTOS → Port**, set the run-time stats clock to **ESP Timer**.
+3. Under **Common Golf Protocol demo**, enable `CGP_CPU_PROFILING`.
 
-### Optional CPU profiling
-
-In the role's `menuconfig`, open **Component config → FreeRTOS → Kernel**,
-enable `configGENERATE_RUN_TIME_STATS`, and choose `uint64_t` for
-`configRUN_TIME_COUNTER_TYPE`. Under **FreeRTOS → Port**, choose **ESP Timer**
-for the runtime statistics clock. Then enable **Report per-core CPU usage every
-two seconds** (`CGP_CPU_PROFILING`) under **Common Golf Protocol demo**. Profiling
-is off by default; rebuild and flash after changing these options.
-
-Repeat a workload with **Print received JSON payloads to serial**
-(`CGP_LOG_PAYLOADS`) enabled and disabled to separate verbose serial logging from
-protocol processing. Connection and resource logs remain enabled in both cases.
-
-Each `CPU` line summarizes roughly two seconds. Core and task percentages use
-one core as 100%; `chip_busy_pct` uses both cores together as 100%.
-`accounted_core_pct` includes idle tasks and should be near 200% on this board.
-Sample maxima are maxima of two-second averages, not instantaneous peaks.
-
-IPC callbacks force each core's current idle runtime to be booked before
-sampling. Interrupt runtime is charged to the interrupted task, including idle;
-these are scheduler estimates, not instruction or cycle counts. Profiling adds
-overhead: `profiler_core_pct` covers the profiler task, while IPC and scheduler
-accounting costs also appear elsewhere.
-
-Use the one-board harness for active-to-idle and stress workloads:
+The firmware then logs a `CPU` line about every 2 seconds. Core and task
+percentages treat one core as 100%; `chip_busy_pct` treats both cores together
+as 100%, and `accounted_core_pct` should be close to 200%. Interrupt time is
+charged to the interrupted task, so the figures are scheduler estimates.
+`profiler_core_pct` is the profiler's own cost. Toggle `CGP_LOG_PAYLOADS` to
+measure serial logging separately.
 
 ```sh
 .venv/bin/python tests/hardware_peer.py listen --duration 120 --quiet-after 30
@@ -280,18 +182,14 @@ Use the one-board harness for active-to-idle and stress workloads:
 .venv/bin/python tests/analyze_cpu.py serial.log --start 30 --end 60
 ```
 
-Run workloads separately and capture one boot per serial log. Analyzer bounds
-are **seconds since board boot**; replace the example bounds with the observed
-steady-state active or idle interval, excluding handshakes. It uses only complete
-sample windows and weights averages by their duration. The harness reports
-actual workload rates alongside its configured intervals.
+Capture one boot per log. `--start` and `--end` are seconds since boot; choose
+a steady-state window without handshakes.
 
-## Native checks
+## Host tests
 
-The demo consumes the standalone [C reference library](../../implementations/c/README.md).
-No ESP-IDF activation is needed to compile the same transport, TLS, framing,
-and mock sources for the host. Fetch the standalone dependencies first. These tests use loopback endpoints;
-they do not test ESP32 Wi-Fi or mDNS discovery.
+These compile the firmware's transport, TLS, framing, and mock sources for the
+host and run them over loopback. They don't exercise Wi-Fi or mDNS. From
+`examples/esp32`:
 
 ```sh
 python3 ../../implementations/c/tools/fetch_deps.py
@@ -303,25 +201,15 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests
 ```
 
-Run these commands from `examples/esp32`. CTest runs the reference library
-tests (including framing and JSON guards) and the firmware JSON-extraction test.
-Python tests run through pytest:
+- CTest: the C library tests plus the firmware JSON extraction test.
+- `tests/integration/test_c_mock_schema.py`: validates `mock_samples` output
+  against the schemas.
+- `tests/integration/test_c_python_interop.py`: runs `cgp_host` against Python
+  peers over QUIC, including concurrent connections and stream errors.
+- `tests/test_analyze_cpu.py`: tests the CPU log analyzer.
 
-- `tests/integration/test_c_mock_schema.py` launches the compiled `mock_samples`
-  executable and validates its JSON stdout against the repository schemas.
-- `tests/integration/test_c_python_interop.py` launches compiled `cgp_host`
-  processes and checks real QUIC traffic between C roles and Python peers,
-  including concurrent connections and stream error handling.
-- `tests/test_analyze_cpu.py` tests the Python CPU log analyzer directly.
-
-The integration tests use subprocesses, not C FFI, and require no board. They
-use `build-native` by default; pass `--native-build-dir /path/to/build` to pytest
-to use another build. Missing executables produce an explicit test error.
-A failing test exits nonzero.
-
-For AddressSanitizer and UndefinedBehaviorSanitizer checks, configure a separate
-host build with `CGP_SANITIZE=ON`. This instruments the C library, its dependencies,
-and the native test programs; it requires a compiler supporting both sanitizers.
+Pass `--native-build-dir DIR` to pytest to use a different build. For
+ASan/UBSan:
 
 ```sh
 cmake -S tests -B build-native-sanitize -DCMAKE_BUILD_TYPE=Debug -DCGP_SANITIZE=ON
@@ -332,17 +220,10 @@ ctest --test-dir build-native-sanitize --output-on-failure
 
 ## Dependencies
 
-The fetch script verifies SHA-256 hashes of pinned ngtcp2 and wolfSSL source
-archives; ESP-IDF's component manager fetches pinned `espressif/mdns` 1.8.2.
-Downloaded dependencies, build outputs, and local configurations are ignored by
-Git. The TLS wrapper uses software cryptography and the ESP32 hardware RNG.
+`scripts/fetch_deps.py` downloads pinned ngtcp2 and wolfSSL archives and
+verifies their SHA-256. The ESP-IDF component manager fetches
+`espressif/mdns` 1.8.2. TLS uses software cryptography and the hardware RNG.
 
-**wolfSSL is GPL-3.0-or-later with a commercial licensing alternative.** The
-example's Apache-2.0 license does not replace dependency licenses. See the
-[wolfSSL wrapper notes](components/wolfssl/README.md) before distributing linked
-firmware. These dependency pins are for a reproducible experiment; review and
-retest updates before using the code in a maintained product.
-
-The firmware `CGP_DRAFT` menuconfig option selects draft 1 or draft 2 (default).
-Synthetic draft-1 shots use `reduced_accuracy`; draft 2 uses `estimated` in
-shot and club messages. All peers on a connection must use the same draft.
+**wolfSSL is GPL-3.0-or-later** (commercial licenses are available). See the
+[wolfSSL component notes](components/wolfssl/README.md) before distributing
+firmware.

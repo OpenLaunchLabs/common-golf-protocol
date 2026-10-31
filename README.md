@@ -23,7 +23,7 @@ explicitly configured private JSON channels. The Python package and Rust crate
 are local packages, not published releases. Draft 1 support lets the tests check
 older peers and ALPN boundaries; new applications should use draft 2.
 
-Follow the [implementation guide](implementations/README.md#build-and-test-locally)
+Follow the [implementation guide](implementations/README.md#build-and-test)
 to build the libraries and run their unit tests plus a
 [63-case cross-language QUIC matrix](tests/compatibility/README.md),
 malformed-stream probes, and the reference application tests. The guide also

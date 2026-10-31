@@ -1,54 +1,57 @@
-# Cross-language QUIC compatibility
+# Compatibility tests
 
-`run.py` launches independent Python, Rust, and C processes and exchanges actual
-QUIC/TLS traffic on loopback. It checks all nine ordered language pairs, including
-self-pairs. Each pair exercises:
+Build the libraries first; see the
+[implementation guide](../../implementations/README.md#build-and-test). Run
+everything from the repository root.
 
-- 0.1.0 ↔ 0.1.0, 0.1.1 ↔ 0.1.1, and both draft-1 patch-version combinations;
-- draft 2 (0.2.0);
-- all standard JSON channels, including the unprefixed channel-2 reply;
-- explicitly configured private JSON channels;
-- both ordered ALPN mismatches, which must fail without delivering messages.
+| Script | What it checks |
+|---|---|
+| `fixtures.py` | The shared [message corpus](../fixtures/conformance.json) validates against the frozen draft schemas. |
+| `test_conformance.py` | Invalid messages are rejected by the schema checks (pytest). |
+| `run.py` | Live QUIC between Python, Rust, and C peers. |
+| `adversarial.py` | Malformed and hostile streams against each library. |
+| `reference_apps.py` | The example simulator against each example device. |
+| `discovery.py` | DNS-SD between every advertiser/browser pair. Needs multicast; not in CI. |
 
-That is 63 cases: 45 positive sessions and 18 negative handshakes. Every received
-standard message is validated against the appropriate published JSON Schema.
-The runner checks authenticated Ed25519 fingerprints, channel coverage and
-draft-specific accuracy metadata. Every implementation reads the same
-[message corpus](../fixtures/conformance.json), and the runner compares received
-messages with it. `fixtures.py` validates it against the published draft
-schema snapshots before the live tests. `schema_check.py` supplies test-only
-schema and cross-field checks shared by fixtures and captured traffic checks.
-Run `python -m pytest tests/compatibility/test_conformance.py` to exercise invalid
-message conformance cases.
+`schema_check.py` holds the schema and cross-field checks shared by these
+scripts.
 
-`adversarial.py` additionally probes each language on both drafts, with
-13 required checks per case (78 total). These exercise malformed and declined
-streams, duplicate ownership, truncated FIN, maximum frames, reopening, independent
-clients, and the channel-2 response path. It runs in CI and writes
-`test-results/adversarial.json`. `discovery.py` checks the nine DNS-SD combinations
-separately because it requires a multicast-capable network.
+## `run.py`
 
-`reference_apps.py` pairs the actual simulator class with all five reference
-device classes on each draft (10 sessions), including Open Connect responses,
-draft-specific preliminary-shot metadata, and trusted club/flight channels.
-It runs in CI; `--discovery` additionally resolves only the test's own
-unique DNS-SD service names.
+Covers all nine ordered language pairs, including each language with itself.
+Each pair runs:
 
-Follow the [implementation guide](../../implementations/README.md#build-and-test-locally)
-for setup, builds, and the complete test sequence. After building, invoke the
-matrix from the repository root:
+- draft 1 with every 0.1.0/0.1.1 combination (4 sessions);
+- draft 2, 0.2.0 (1 session);
+- both ALPN mismatch directions, which must fail without delivering messages
+  (2 handshakes).
+
+That is 63 cases. Each session sends every standard channel, including the
+channel-2 reply, and a private JSON channel. The runner checks fingerprints,
+validates every received message against the schema, and compares it with the
+corpus.
 
 ```sh
 .venv/bin/python tests/compatibility/run.py
+.venv/bin/python tests/compatibility/run.py --languages python,rust --drafts 2 --no-mismatch
 ```
 
-For a focused run, use `--languages python,rust --drafts 2 --no-mismatch`.
-Executable commands can be overridden with `--python`, `--rust`, and `--c`.
-The default machine-readable report is `test-results/compatibility.json`.
-No test contacts a launch monitor or modifies a hardware identity. Direct
-addresses are confined to the diagnostic peers; product integrations should
-use the libraries' DNS-SD discovery APIs.
+`--python`, `--rust`, and `--c` override the peer commands. The report goes to
+`test-results/compatibility.json`.
 
-This matrix is transport compatibility testing, not proof of every application
-behavior or RF conditions on an ESP32. Hardware flashing, resource measurements,
-and multicast behavior on a deployment network require separate verification.
+## `adversarial.py`
+
+Runs against each language on both drafts: malformed and declined streams,
+duplicate ownership, truncated FIN, maximum-size and fragmented frames,
+reopening, multiple clients, and the channel-2 reply. Report:
+`test-results/adversarial.json`.
+
+## `reference_apps.py`
+
+Pairs `examples/sim.py` with all five example devices on both drafts (10
+sessions), covering Open Connect replies, preliminary-shot metadata, and the
+trusted club and flight channels. `--discovery` connects through DNS-SD instead
+of direct addresses.
+
+These tests run on loopback. They don't cover RF conditions, ESP32 hardware, or
+multicast on real networks.

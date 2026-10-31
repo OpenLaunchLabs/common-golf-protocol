@@ -1,24 +1,23 @@
-# Rust reference application
+# Rust example
 
-This application uses the independent crate in `implementations/rust` to run a
-draft 2 launch monitor or simulator. It advertises and discovers devices through
-DNS-SD; users select a service name rather than an address or port.
-
-From the repository root, build once and run these in separate terminals:
+A draft 2 launch monitor and simulator built on the
+[Rust crate](../../implementations/rust/README.md). Devices are found by DNS-SD
+service name.
 
 ```sh
 cargo build --locked --manifest-path examples/rust/Cargo.toml
-examples/rust/target/debug/cgp-demo --role listen
-examples/rust/target/debug/cgp-demo --role connect
+examples/rust/target/debug/cgp-demo --role listen    # terminal 1: launch monitor
+examples/rust/target/debug/cgp-demo --role connect   # terminal 2: simulator
 ```
 
-The monitor emits synthetic shots and status. The simulator sends state and a
-result for each shot. `--name NAME` changes the advertised/selected service name,
-`--identity DIR` selects persistent Ed25519 key storage, and `--duration SECONDS`
-sets the run time (default 60 seconds). Fingerprints are printed for inspection;
-this demonstration accepts discovered peers without a product enrollment policy.
-Each accepted connection has its own channel streams and shot counter.
+The launch monitor sends synthetic shots and status; the simulator sends state
+and a result for each shot.
 
-For diagnostic host/port inputs, draft 1 compatibility, fixtures, and cross-language
-tests, use the library's `cgp-peer` executable instead. See the
-[Rust library guide](../../implementations/rust/README.md).
+| Option | Default |
+|---|---|
+| `--name NAME` | `Rust launch monitor` (advertised or selected service name) |
+| `--identity DIR` | Ed25519 key directory |
+| `--duration SECONDS` | `60` |
+
+Fingerprints are printed but not checked; the demo trusts any discovered peer.
+For draft 1, fixtures, or direct addresses, use the crate's `cgp-peer`.

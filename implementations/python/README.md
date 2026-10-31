@@ -1,11 +1,11 @@
 # Python reference package
 
-Install locally with `python -m pip install ./implementations/python`. The
-package is independent of `examples/`. JSON Schema conformance checks live in
-the repository tests and are not runtime dependencies.
-Draft 1 supports revisions 0.1.0 and 0.1.1; draft 2 supports 0.2.0.
-Select the draft explicitly on each endpoint: different ALPNs fail the TLS handshake.
-`info.protocol_version` is informational and never drives receive behavior.
+```sh
+python -m pip install ./implementations/python
+```
+
+Supports draft 1 (0.1.0, 0.1.1) and draft 2 (0.2.0). Choose the draft on each
+endpoint; mismatched ALPNs fail the TLS handshake.
 
 ```python
 import asyncio
@@ -30,50 +30,49 @@ async def main():
 asyncio.run(main())
 ```
 
-For a simulator subclass `Connection` with `role="sim"`, implement
-`on_message(channel, message, stream_id)`, call `discover()`, and use
-`async with dial(peer, identity, factory, draft=...)`. A listener accepts many
-connections; each factory invocation owns its channels, snapshots, peer key,
-and trust tier. A connector may open multiple independent `dial` contexts.
+A simulator subclasses `Connection` with `role="sim"`, implements
+`on_message(channel, message, stream_id)`, finds peers with `discover()`, and
+connects with `async with dial(peer, identity, factory, draft=...)`. Each
+connection gets its own `Connection` instance with its own channels, snapshots,
+peer key, and trust tier.
 
-The adapter sends info first, requests client certificates, verifies Ed25519
-identity type and TLS proof of possession, ignores CA chains/validity dates,
-uses a 90-second idle timeout and 15-second QUIC PINGs. Keys persist with mode
-0600. Unknown certificates receive maker tier. Pass `trusted={fingerprint:
-"developer"}` (or `"internal"`), and make application channel policy decisions
-from `peer_tier` in `on_connected` / your `read_channels` configuration. A
-fingerprint is the 32-byte public key in lowercase hex, never a certificate hash.
+## Identity and trust
 
-`publish` reuses an outgoing channel. `open`, `send`, and `finish` expose stream
-lifetimes directly; channel 2 alone uses bidirectional standard streams. Its
-responder calls `send(stream_id, reply)` without another channel prefix.
-Applications choose distinct shot numbers if using both shot and Open Connect
-channels and maintain their own monotonically increasing shot/swing counters.
-Standard messages are dictionaries. Runtime framing checks JSON encoding and
-size; repository tests check schema conformance and draft-specific accuracy
-fields. Applications consume the fields they need; unknown fields are retained
-in the dictionary and can be ignored. `Snapshots` implements whole shot replacement and status/state
-patch semantics; mark `stream_open=True` for a new status/state stream.
+Keys persist with mode 0600. The fingerprint is the 32-byte Ed25519 public key
+in lowercase hex. Certificate chains and validity dates are ignored; TLS proves
+key possession. Unknown peers get the `maker` tier. Pass
+`trusted={fingerprint: "developer"}` (or `"internal"`) and read `peer_tier` in
+`on_connected` to make channel decisions.
 
-Private JSON channels use explicit configuration on both endpoints:
-`private_channels={1000: max_bytes}`. The application supplies matching channel
-numbers, payload semantics, and permissions. Unknown private channels are declined
-without affecting standard channels. A private bidirectional stream can be opened
-with `open(1000, bidirectional=True)`; replies use the same JSON framing without
-another channel prefix.
+## Channels and streams
 
-`cancel(stream_id)` cancels one stream. `on_stream_cancelled` lets applications
-release their own buffers. The default reliable send budget is 256 KiB per
-connection. Backpressure raises `BufferError`; callers should yield and retry.
-Completed streams release SDK state; aioquic manages QUIC lifetime bookkeeping.
+- `publish(channel, message)` sends on the channel's outgoing stream.
+- `open`, `send`, and `finish` control stream lifetimes directly.
+- Channel 2 (Open Connect) uses bidirectional streams. The responder replies
+  with `send(stream_id, reply)`, without a channel prefix.
+- `cancel(stream_id)` cancels one stream; `on_stream_cancelled` lets the
+  application release its own buffers.
+- The send budget is 256 KiB per connection. When it is full, sends raise
+  `BufferError`; yield and retry.
 
-The [Python reference applications](../../examples/python/README.md) demonstrate
-launch monitors, Open Connect, a swing-speed radar, a control box, and a simulator.
+Messages are dictionaries, and unknown fields are kept. Applications maintain
+their own shot and swing counters, and must not send the same shot on both
+channel 1 and channel 2. `Snapshots` implements shot replacement and
+status/state patching; pass `stream_open=True` when a new status or state
+stream starts.
 
-`cgp-python-peer` / `python -m common_golf.peer` is a **diagnostic test harness**
-with direct host/port arguments. Product code should use DNS-SD discovery;
-manual addressing is not a product connection flow. The harness emits received
-messages and peer fingerprints as NDJSON and exchanges every standard channel.
+Private JSON channels must be configured on both endpoints, e.g.
+`private_channels={1000: max_bytes}`. Unconfigured private channels are
+declined. Open a bidirectional private stream with
+`open(1000, bidirectional=True)`.
+
+## Diagnostic peer
+
+`cgp-python-peer` (or `python -m common_golf.peer`) is a test harness that takes
+`--host`/`--port` directly, exchanges every standard channel, and writes
+received messages as NDJSON. Products should use DNS-SD discovery instead.
+
+## Development
 
 ```sh
 python -m pip install -e './implementations/python[test]'
@@ -81,10 +80,10 @@ python -m pytest implementations/python/tests
 python -m build implementations/python
 ```
 
-The aioquic version is pinned because client-certificate requests and
-queue/lifetime inspection require private API access. All
-access is isolated in `compat.py`, which fails clearly for unsupported versions. This package
-does not globally monkey-patch aioquic. The adapter also corrects two pinned
-1.2.0 lifecycle defects: send-only stream retirement and duplicate STOP_SENDING
-reset handling. Live tests cover both, including raw aioquic protocol users of
-the adapter and the SDK. Other transport exceptions remain visible.
+aioquic is pinned to 1.2.0 because client-certificate requests and stream
+lifetime inspection use its private API. That access is confined to
+`compat.py`, which fails clearly on other versions. It also fixes two aioquic
+1.2.0 defects: send-only stream retirement and duplicate STOP_SENDING handling.
+
+See the [Python applications](../../examples/python/README.md) for complete
+examples.
