@@ -324,7 +324,7 @@ or a channel does not move it. Every string so far, and why it moved:
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
 | `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
-| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, new connection timers, UUIDv7 whole-snapshot shot identity without `final`, and listener-menu custom channels replacing channel 2 |
+| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, new connection timers, UUIDv7 whole-snapshot shot identity without `final`, listener-menu custom channels replacing channel 2, and renamed state channels with capture/lie context |
 
 At 1.0 the string becomes `common-golf/1`. From then on every change under
 that string is additive: new optional fields, new channels. The rules that
@@ -461,9 +461,9 @@ stream, write the channel ID, write messages. There is no negotiation.
 | 1 | `shot` | `io.common-golf.shot-v1` | device | device to sim | one-way | 65,535 | yes |
 | 2 | reserved | | | | | | |
 | 3 | `club` | `io.common-golf.club-v1` | device | device to sim | one-way | 65,535 | no |
-| 4 | `status` | `io.common-golf.status-v1` | device | device to sim | one-way | 65,535 | no |
+| 4 | `device_status` | `io.common-golf.device-status-v1` | device | device to sim | one-way | 65,535 | no |
 | 5 | `control` | `io.common-golf.control-v1` | controller | controller to sim | one-way | 65,535 | no |
-| 6 | `state` | `io.common-golf.state-v1` | sim | sim to device | one-way | 65,535 | no |
+| 6 | `simulator_state` | `io.common-golf.simulator-state-v1` | sim | sim to device | one-way | 65,535 | no |
 | 7 | `result` | `io.common-golf.result-v1` | sim | sim to device | one-way | 65,535 | no |
 | 8 | `flight` | `io.common-golf.flight-v1` | device | device to sim | one-way | 65,535 | no |
 | 9 to 999 | reserved | | | | | | |
@@ -574,10 +574,20 @@ here; that is channel 8.
 | `spin_axis_degrees` | number | with total | -90 to 90. 0 is no curve; positive curves right, whatever the sign of total |
 | `backspin_revolutions_per_minute`, `sidespin_revolutions_per_minute` | number | | Only in addition to total and axis; positive sidespin curves right |
 | `measured_at` | string | | UTC RFC 3339 measurement timestamp; independent of `shot_uuid`. Omit if unknown |
-| `player_dexterity` | `right`, `left`, `unknown` | | See section 7 |
-| `tee_position` | `tee`, `mat`, `ground`, `unknown` | | Where the ball was struck from |
+| `player_dexterity` | `right`, `left` | | Omit when unknown; see section 7 |
+| `ball_lie` | `tee`, `fairway`, `putting_green`, `sand`, `rough` | | Known hitting-area lie, including simulated sand/rough; omit when unknown |
 | `estimated` | array of string | | Names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy. See section 7 |
-| `shot_kind` | `full`, `putt`, `chip` | | |
+
+`ball_lie` travels from the device or its connector application to the
+simulator with the shot. It reports the known hitting-area lie: for example,
+a tee, a normal fairway-like surface, a putting surface, simulated sand, or
+simulated rough. It is not a request to move the virtual ball to that lie.
+When a hitting surface has already affected the measured launch, this
+context lets the simulator account for that instead of blindly applying
+the same effect again. No numerical penalty or particular physics model is
+encoded by this field. If the source does not know the lie, it omits the
+field rather than inferring it from the shot's measurements. This replaces
+`tee_position`; capture mode is reported separately, replacing `shot_kind`.
 
 Spin has one canonical form: total and axis, sent together or not at all,
 in the convention launch monitors and golfers already use. The sign of
@@ -604,10 +614,11 @@ For example, a putting device that measures speed and horizontal direction
 but not launch angle can estimate the vertical angle as zero and mark that
 field in `estimated`, following section 7. Optional unmeasured values, such
 as spin, can be omitted. The example supplies all three required launch
-measurements and uses the existing `shot_kind` field:
+measurements. Capture mode, when reported, is separate device state on
+channel 4; there is no `shot_kind` field in this draft:
 
 ```json
-{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"], "shot_kind": "putt"}
+{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"]}
 ```
 
 A device MAY send more than one `shot` with the same `shot_uuid` as its
@@ -676,19 +687,43 @@ not delay ball simulation or change either source's shot identity.
 {"type": "club", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "club_speed_meters_per_second": 47.1}
 ```
 
-### 5.4 Channel 4: `status`
+### 5.4 Channel 4: `device_status`
 
-Device state. Sent in full when the stream opens, then as patches: only
-the fields that changed. An absent field is unchanged, a `null` field is
-cleared. All optional.
+Device-owned state. The device sends a complete snapshot when the stream
+opens, then only changed fields. An absent field is unchanged and `null`
+clears a value. A nested object replaces the previous object whole rather
+than merging its fields. All fields other than `type` are optional.
 
-| Field | Type |
+| Field | Notes |
 |---|---|
-| `ready` | boolean |
-| `ball_detected` | boolean |
-| `battery_percent` | number |
-| `uptime_seconds` | number |
-| `message` | string, human readable |
+| `ready` | Whether the device is ready to capture |
+| `capture_mode` | Actual device mode: `full`, `short`, or `putting` |
+| `ball_detected` | Whether the device detects a ball |
+| `ball_zone` | `{x_meters, y_meters, width_meters, height_meters}`: the device's usable placement region; width and height are nonnegative |
+| `ball_position` | `{x_meters, y_meters}`: the detected ball position, if known |
+| `battery_percent` | Number from 0 to 100 |
+| `uptime_seconds` | Nonnegative uptime |
+| `message` | Human-readable device message |
+
+The two position objects use the device's local placement frame: the origin
+is defined by the device, positive x is right of its target line and positive
+y is forward along it. They are capture-area coordinates, not coordinates
+on the simulated course. A device offering them documents its origin.
+Omitting them makes no claim that manual placement is necessary. Both are
+reported by the device; a simulator does not command a ball position here.
+
+`capture_mode` reports the mode actually in effect. It is independent of
+whether the simulator requested that mode, and does not acknowledge a request.
+A device that lacks a mode leaves it unsupported rather than reporting that
+it applied it. The channel remains optional; receivers can decline it.
+
+```json
+{"type": "device_status", "ready": true, "capture_mode": "putting", "ball_detected": true, "ball_zone": {"x_meters": -0.1, "y_meters": 0, "width_meters": 0.2, "height_meters": 0.3}, "ball_position": {"x_meters": 0, "y_meters": 0.1}}
+```
+
+This replaces draft 2's `status` name on channel 4 and moves device placement
+information from the old simulator-owned `state.ball_zone` to the device.
+Published draft-2 names and schemas remain unchanged.
 
 ### 5.5 Channel 5: `control`
 
@@ -718,24 +753,40 @@ uses a private channel.
 {"type": "control", "command": "left", "event": "down"}
 ```
 
-### 5.6 Channel 6: `state`
+### 5.6 Channel 6: `simulator_state`
 
-Simulator context. Sent in full when the stream opens, then as patches:
-only the fields that changed. An absent field is unchanged, a `null` field
-is cleared, and a nested object such as `player` replaces the previous
-object whole rather than merging into it. All fields optional.
+Simulator-owned context. Sent in full when the stream opens, then as patches:
+only the fields that changed. An absent field is unchanged, `null` clears it,
+and nested objects replace their previous values whole. All fields other
+than `type` are optional.
 
 | Field | Notes |
 |---|---|
-| `ready` | The simulator will act on a shot right now |
-| `player` | `{name, dexterity}` |
-| `club` | `{id, name}`; `id` uses the common abbreviations `DR`, `3W`, `7I`, `PW`, `PT` |
-| `mode` | `range`, `course`, `putting` |
-| `ball_zone` | `{x_meters, y_meters, width_meters, height_meters}` where the ball should be placed, in the device's frame. Optional, and clunky for users; prefer devices that do not need it |
+| `ready` | The simulator will act on a shot right now; not a device arm/disarm command |
+| `player` | `{name, dexterity}`; known dexterity is `right` or `left`, otherwise omit it |
+| `distance_to_target_meters` | Nonnegative distance from the ball to the pin or current aim point, in meters; `null` clears it |
+| `requested_capture_mode` | Requested device mode: `full`, `short`, or `putting`; `null` clears the request |
+
+A requested capture mode is optional context, not a required control interface
+or a readiness barrier. A device MAY use it in its capture policy or ignore
+it if unsupported. The simulator MUST NOT wait for an acknowledgement.
+There is no acknowledgement message: `device_status.capture_mode`, if offered,
+is the device's actual state. Neither that state nor `simulator_state.ready`
+is inferred from the request. Clearing a request does not select a default
+mode; that remains device policy.
+
+The old `state.club` and game `mode` fields are not carried in this profile.
+Club identity/display can use a separately agreed custom contract; capture
+mode describes device behavior instead of the simulator's game mode. Ball
+placement is device-owned under section 5.4. No automatic translation from
+a club abbreviation or game mode to a capture mode is defined.
 
 ```json
-{"type": "state", "ready": true, "mode": "course", "player": {"name": "Chad", "dexterity": "right"}, "club": {"id": "PT"}}
+{"type": "simulator_state", "ready": true, "player": {"name": "Alex", "dexterity": "right"}, "distance_to_target_meters": 3.048, "requested_capture_mode": "putting"}
 ```
+
+This replaces draft 2's `state` name on channel 6. Devices using the old name,
+`club`, or `mode` continue to use the published draft-2 profile.
 
 ### 5.7 Channel 7: `result`
 
@@ -881,7 +932,8 @@ total spin is negative (topspin); section 5.1 has the decomposition.
 `player_dexterity` travels alongside so a consumer can translate into the
 player's terms: for a right-handed player, positive club path is in-to-out
 and positive face angle is open; for a left-handed player each is the
-opposite. `unknown` is a legitimate value when the device cannot tell. The
+opposite. When the device cannot tell, it omits `player_dexterity`; the
+`unknown` string used by earlier drafts is not sent in this profile. The
 wire never carries two handed variants of a number.
 
 `measured_at` is an optional UTC RFC 3339 measurement timestamp, including
@@ -928,10 +980,11 @@ rpm, degrees and yards:
 | `ClubData.SpeedAtImpact` | `speed_at_impact_meters_per_second` | × 0.44704 |
 | `ClubData.HorizontalFaceImpact`, `VerticalFaceImpact` | `face_impact_horizontal_millimeters`, `…_vertical_…` | unit undocumented; assume mm |
 | `ClubData.ClosureRate` | `closure_rate_degrees_per_second` | |
-| `ShotDataOptions.LaunchMonitorIsReady` | `status.ready` | |
-| `ShotDataOptions.LaunchMonitorBallDetected` | `status.ball_detected` | |
+| `ShotDataOptions.LaunchMonitorIsReady` | `device_status.ready` | |
+| `ShotDataOptions.LaunchMonitorBallDetected` | `device_status.ball_detected` | |
 | Reply `Code 200` | `result.accepted: true` | |
-| Reply `Code 201` + `Player` | `state.player`, `state.club` | `RH`/`LH` to `right`/`left` |
+| Reply `Code 201` + `Player` | `simulator_state.player` | `RH`/`LH` to `right`/`left`; no direct club or capture-mode mapping |
+| Reply `Player.DistanceToTarget` | `simulator_state.distance_to_target_meters` | Convert yards × 0.9144 when the source unit is established; the reply has no unit label |
 
 ### 8.2 OpenGolfSim
 
@@ -941,8 +994,8 @@ rpm, degrees and yards:
 | `shot.shot.verticalLaunchAngle`, `horizontalLaunchAngle` | launch angles |
 | `shot.shot.spinSpeed` | `total_spin_revolutions_per_minute` |
 | `shot.shot.spinAxis` | `spin_axis_degrees`, **negated** (OpenGolfSim positive is left-curving) |
-| `device.status` | `status.ready` |
-| `player.data.club.{id,name}` | `state.club` |
+| `device.status` | `device_status.ready` |
+| `player.data.club.{id,name}` | No direct mapping; club display and capture-mode policy are application concerns |
 | `result.data.result.{carry,total,lateral,height}` | `result.carry_distance_meters`, `total_distance_meters`, `carry_side_meters`, `max_height_meters` |
 | `control.command` `left right up down club-up club-down drop mulligan rehit` | `control.command` with hyphens replaced by underscores; `event` passes through |
 
@@ -957,7 +1010,7 @@ topspin included;
 can be converted to UTC RFC 3339; otherwise omit the measurement timestamp.
 Assign the source shot a separate UUIDv7 and retain it for related messages
 and updates. `status.uptime_seconds` and `status.firmware_version` go to
-`status` and `info`. Nova's TCP API is
+`device_status` and `info`. Nova's TCP API is
 Open Connect and uses the `io.common-golf.open-connect-v1` custom contract. Nova's touch bar maps to `control`:
 Left and Right to `left` and `right`, A to `reset_aim`, Y to `heatmap`.
 
@@ -1022,13 +1075,13 @@ be omitted; section 5.1 illustrates estimating a required launch measurement.
 | `ClubHeadSpeedMS`, `SmashFactor` | `club_speed_meters_per_second`, `smash_factor` |
 | `DynamicLoftDeg`, `FaceAngleDeg`, `ClubPathDeg`, `AttackAngleDeg` | `dynamic_loft_degrees`, `face_angle_degrees`, `club_path_degrees`, `angle_of_attack_degrees` |
 | `ImpactPointXMM`, `ImpactPointYMM` | `face_impact_horizontal_millimeters`, `face_impact_vertical_millimeters`, same signs |
-| `ReadyState` | An enum (`NotReady`, `Ready`, `BallDetected`, `Processing`); mapping it to `status.ready` and `status.ball_detected` needs adapter policy |
-| `Heartbeat.Battery` | `status.battery_percent`; unknown (`0xFF`) is omitted initially or clears a prior value with `null` |
+| `ReadyState` | An enum (`NotReady`, `Ready`, `BallDetected`, `Processing`); mapping it to `device_status.ready` and `device_status.ball_detected` needs adapter policy |
+| `Heartbeat.Battery` | `device_status.battery_percent`; unknown (`0xFF`) is omitted initially or clears a prior value with `null` |
 | `Hello.DeviceName`, `Firmware` | `info.name`, `info.firmware_version` |
-| `SetClubInfo` | Handedness maps to `state.player.dexterity`; club selection maps to `state.club` using CGP's club abbreviations |
-| `SetDetect` | Arm/disarm command; `state.ready` is simulator readiness, so conversion needs adapter policy rather than a direct rename |
+| `SetClubInfo` | Handedness maps to `simulator_state.player.dexterity`; club selection has no direct capture-mode mapping |
+| `SetDetect` | Arm/disarm command; `simulator_state.ready` is simulator readiness, so conversion needs adapter policy rather than a direct rename |
 | `SetBallType` | Vendor configuration; section 6 |
-| `Error.Message` | `status.message` |
+| `Error.Message` | `device_status.message` |
 
 Pureplay's component gap-fill formula takes an unsigned square root for
 total spin and uses `atan2(side, back)` for axis. With negative backspin,
