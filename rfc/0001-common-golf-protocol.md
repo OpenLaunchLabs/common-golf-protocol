@@ -14,13 +14,14 @@ in RFC 2119. Everything else is explanation.
 
 ## 1. Why
 
-Three protocols are in common use between launch monitors and simulators.
+The following protocols connect launch monitors and simulators.
 
 | Protocol | Transport | Who listens | Framing | Units | Direction | Discovery | Security |
 |---|---|---|---|---|---|---|---|
 | GSPro Open Connect v1 | TCP 921 | Simulator | Unspecified | `Units: "Yards"` label; speed is mph, unstated | Device to sim, with coded replies | None | None |
 | OpenGolfSim | TCP 3111 | Simulator | Newline-delimited JSON | `unit: imperial\|metric`; results always metres | Bidirectional | None | None |
 | OpenLaunch Nova | TCP 2921 and WebSocket 2920 | Device | Newline-ish on TCP, one frame per message on WS | mph on TCP, m/s on WS, same device | Device to sim only | mDNS | None |
+| [Pureplay Connect v1](https://github.com/PureplayGolf/Pureplay-Connect) | TCP 9760 | Simulator | Little-endian binary, CRC32C | Fixed m/s, degrees, rpm, mm | Device telemetry and simulator commands | None specified | None specified |
 
 Every integrator writes an adapter per pair of products. The same device
 reports ball speed in two units on two ports. Nobody authenticates anybody,
@@ -70,6 +71,13 @@ The side closer to the hardware listens: a launch monitor, a swing radar, a
 control box, or a desktop connector application standing in for one. The
 simulator connects. Either side MAY take either QUIC role when a deployment
 needs it; channel ownership in section 5 does not depend on who connected.
+
+The direction serves the user at the screen: the simulator browses and the
+user picks a device. A screenless device advertises and waits instead of
+asking its owner to enter the simulator's address. Open Connect,
+OpenGolfSim, and Pureplay put the listener at the simulator; Nova already
+shows the device-listener alternative. Discovery removes the address-entry
+step whichever peer is listening.
 
 A listener MUST accept more than one connection at a time and MUST NOT
 refuse or drop a connection because another exists. A connector MUST be
@@ -160,6 +168,14 @@ payload: exactly length octets, one UTF-8 JSON object
 
 A reader MUST handle a message split across reads and several messages in
 one read.
+
+Big-endian headers follow the traditional network-byte-order convention.
+Pureplay chooses little-endian binary fields, which can be convenient on
+little-endian microcontrollers. Neither order makes a protocol inherently
+more suitable for low-level devices: portable implementations encode and
+decode the specified order explicitly, rather than copying native structs
+onto the wire. CGP's binary headers have a byte order; its JSON numbers do
+not.
 
 Every channel definition states its maximum message size, and a receiver
 MUST accept any message up to that size on that channel. Channels 0 to 8
@@ -412,6 +428,16 @@ axis  = atan2(sidespin, |backspin|) in degrees
 
 Consumers never convert.
 
+For example, a putting device that measures speed and horizontal direction
+but not launch angle can estimate the vertical angle as zero and mark that
+field in `estimated`, following section 7. Optional unmeasured values, such
+as spin, can be omitted. The example supplies all three required launch
+measurements and uses the existing `shot_kind` field:
+
+```json
+{"type": "shot", "shot_number": 13, "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"], "shot_kind": "putt"}
+```
+
 A device MAY send more than one `shot` for the same `shot_number` as its
 estimate refines, each with `final: false` until the last, which carries
 `final: true`. Each message is a complete snapshot that replaces the
@@ -485,6 +511,21 @@ ball data, such as a swing-speed radar.
 | `player_dexterity` | See section 7 |
 | `estimated` | As on channel 1: names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy |
 | `final` | As on channel 1: each message for a `shot_number` replaces the previous one whole |
+
+Timing guidance (informative). For low latency, a simulator can start an
+accepted ball shot from channel 1 without waiting for optional club data on
+channel 3. Club data supports post-shot analysis. Sending available club
+data promptly, and aiming to finish useful refinements within ten seconds
+of the shot or before the next shot, whichever comes first, keeps that
+analysis timely. This is
+application guidance, not a protocol deadline or a receiver timeout. The
+existing `final` flag and whole-snapshot replacement rules still apply.
+
+A standalone club tracker has its own connection and `swing_number`
+sequence. It is not automatically correlated with another device's
+`shot_number`. Associating a nearby swing with a ball shot for display is a
+local heuristic; it need not delay ball simulation or change either
+device's counters.
 
 ```json
 {"type": "club", "swing_number": 3, "club_speed_meters_per_second": 47.1}
@@ -704,6 +745,75 @@ OpenGolfCoach consumes channel 1 fields directly except that it spells
 same sign. Its handed output variants are a presentation of section 7's
 single frame plus `player_dexterity`.
 
+### 8.5 Recording to MCAP
+
+An optional recorder can save a session to [MCAP](https://mcap.dev/spec)
+without changing the CGP wire format. For standard channels and private
+channels carrying JSON, one recording convention is:
+
+| MCAP | Value |
+|---|---|
+| Schema | `encoding: "jsonschema"`, with data from the matching file under `schema/draft-2/`; use channel `schema_id: 0` when no schema is available |
+| Channel | A recorder-chosen `topic`, such as `<connection>/<sender>/shot`; `message_encoding: "json"`; string metadata such as `{"channel_id": "1", "alpn": "common-golf/draft-2"}` |
+| Message data | Original JSON payload bytes, excluding the CGP channel prefix and length header |
+| Message times | `log_time`: recorder receipt time in nanoseconds; `publish_time`: the same value when publication time is unavailable |
+| Message sequence | A recorder counter per recorded channel, or zero when unused; distinct from `shot_number` |
+
+These labels and metadata are local to the recording, not additional wire
+fields. Including the connection and sender separates both directions of
+`info` and Open Connect traffic, and keeps different devices' shot counters
+apart. MCAP channel IDs are file-local and need not match CGP channel numbers.
+
+MCAP timestamps use an epoch understood by the recording's users. The
+payload's `measured_at_nanoseconds` stays unchanged: its epoch may be uptime,
+and measurement time is not necessarily publication or receipt time. The
+[MCAP encoding registry](https://mcap.dev/spec/registry) describes the JSON
+and JSON Schema encodings. Non-JSON private channels need their own recording
+encoding; this convention does not reinterpret their bytes as JSON.
+
+### 8.6 OpenGolfAPI / OpenShot
+
+[OpenShot v0](https://opengolfapi.org/schemas/openshot/v0.json) describes a
+shot event with ball measurements and optional club, device, and context
+fields. Its ball units include mph, degrees, rpm, and yards, so an adapter
+maps fields and converts units to CGP. The published schema requires
+`api_version: "0"` and `ball`; an unchanged Open Connect object lacks those
+required fields. This comparison defines no additional CGP channel or
+transport binding.
+
+### 8.7 Pureplay Connect v1
+
+[Pureplay Connect's specification](https://github.com/PureplayGolf/Pureplay-Connect#readme)
+defines fixed-unit binary telemetry. The following is an informative adapter
+mapping. `ValidMask` distinguishes measurements from unused stored values:
+a cleared field's zero is not a measurement. Unavailable optional fields can
+be omitted; section 5.1 illustrates estimating a required launch measurement.
+
+| Pureplay Connect | Common Golf |
+|---|---|
+| `ShotId` | Allocate increasing `shot_number` values on each CGP connection; retain the source-session/`ShotId` mapping for related ball/club messages and updates |
+| `BallSpeedMS`, `VLA`, `HLA` | `ball_speed_meters_per_second`, `vertical_launch_angle_degrees`, `horizontal_launch_angle_degrees` |
+| `TotalSpinRPM`, `SpinAxisDeg` | Total and axis, after checking the source sign convention |
+| `BackSpinRPM`, `SideSpinRPM` without total and axis | Convert with section 5.1, preserving topspin sign |
+| `ClubHeadSpeedMS`, `SmashFactor` | `club_speed_meters_per_second`, `smash_factor` |
+| `DynamicLoftDeg`, `FaceAngleDeg`, `ClubPathDeg`, `AttackAngleDeg` | `dynamic_loft_degrees`, `face_angle_degrees`, `club_path_degrees`, `angle_of_attack_degrees` |
+| `ImpactPointXMM`, `ImpactPointYMM` | `face_impact_horizontal_millimeters`, `face_impact_vertical_millimeters`, same signs |
+| `ReadyState` | An enum (`NotReady`, `Ready`, `BallDetected`, `Processing`); mapping it to `status.ready` and `status.ball_detected` needs adapter policy |
+| `Heartbeat.Battery` | `status.battery_percent`; unknown (`0xFF`) is omitted initially or clears a prior value with `null` |
+| `Hello.DeviceName`, `Firmware` | `info.name`, `info.firmware_version` |
+| `SetClubInfo` | Handedness maps to `state.player.dexterity`; club selection maps to `state.club` using CGP's club abbreviations |
+| `SetDetect` | Arm/disarm command; `state.ready` is simulator readiness, so conversion needs adapter policy rather than a direct rename |
+| `SetBallType` | Vendor configuration; section 6 |
+| `Error.Message` | `status.message` |
+
+Pureplay's component gap-fill formula takes an unsigned square root for
+total spin and uses `atan2(side, back)` for axis. With negative backspin,
+that loses CGP's topspin sign and can put the axis outside CGP's range.
+Section 5.1 gives the CGP conversion from components. Pureplay's negative-total
+semantics are not explicit, and its worked spin example has opposite signs
+for sidespin and axis, so a direct total/axis copy depends on checking the
+source device's convention.
+
 ## 9. Not in this version
 
 Datagrams. Telemetry streams. Media and video. Trajectory point arrays.
@@ -712,3 +822,11 @@ device configuration. Multiplayer, tournaments and scoring. CBOR or any
 non-JSON encoding on standard channels. Manual addressing in user
 interfaces, which section 3.2 argues against on purpose rather than
 deferring.
+
+USB and Bluetooth bindings are not defined. A tether near the hitting area
+can be struck or pulled; wireless operation avoids that placement constraint.
+For future Bluetooth work, BLE is worth exploring before Bluetooth Classic,
+including a mapping of channels to GATT characteristics rather than assuming
+a serial-stream tunnel. Discovery, authentication, message boundaries, and
+payload limits would need their own specification. This is design guidance,
+not a claim that QUIC framing or trust transfers unchanged.

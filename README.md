@@ -87,8 +87,8 @@ the whole protocol. `schema/` holds one JSON Schema per channel.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the two rules that keep this small,
 and the policy that everything here is written by people.
-[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) lists private
-channels others have built.
+[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) explains how to
+document private channels, with clearly marked placeholder examples.
 
 ## License
 
