@@ -36,9 +36,9 @@
     "estimated": {
       "type": "array",
       "uniqueItems": true,
-      "description": "Numeric fields the device could not measure for this shot, or believes to have reduced accuracy. A sender MUST name only fields present in the message. A receiver ignores any other name",
+      "description": "Numeric fields reported in this message that the device could not measure for this shot, or believes to have reduced accuracy. A sender MUST name only fields present in the message. A receiver ignores any other name",
       "items": {"type": "string"}
     },
-    "player_dexterity": {"enum": ["right", "left", "unknown"]}
+    "player_dexterity": {"enum": ["right", "left"]}
   }
 }

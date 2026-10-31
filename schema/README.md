@@ -33,3 +33,16 @@ extends request bodies only; replies remain unchanged. The listener's first
 covers entry shape, identifier syntax, and bounds; runtime validation also
 checks unique channel numbers, decimal-integer wire notation, endpoint role,
 and menu immutability. `reads` and `reads_contracts` are optional hints.
+
+Working channel 4 is now `device_status.json`, and channel 6 is
+`simulator_state.json`. Device placement and actual capture mode are reported
+on channel 4; optional simulator-requested capture mode and target distance
+are reported on channel 6. These remain patches: omitted fields are unchanged,
+null clears a field, and nested objects replace rather than merge. The old
+status/state schemas remain in the frozen draft directories.
+
+`shot.ball_lie` reports the known hitting-area lie from device to simulator,
+including simulated sand/rough and a tee. It does not prescribe a numerical
+penalty. The old `tee_position` and `shot_kind` fields are removed; actual
+capture mode is device state. Unknown player dexterity is omitted instead of
+sent as the string `unknown`.
