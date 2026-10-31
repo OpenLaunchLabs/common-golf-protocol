@@ -11,6 +11,11 @@ use std::{
     time::Duration,
 };
 
+/// Bound on waiting for CONNECTION_CLOSE to leave the socket. Without the
+/// wait, an application that exits right after a close can drop the packet,
+/// and the peer only notices at the 90 second idle timeout.
+const CLOSE_FLUSH: Duration = Duration::from_secs(1);
+
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }
 fn guard(f: impl FnOnce() -> Result<i32>) -> i32 {
     match catch_unwind(AssertUnwindSafe(f)) {
@@ -50,7 +55,12 @@ impl CgpEndpoint {
         if let Some(peer) = self.peer.take() {
             peer.close();
         }
-        self.connected = None;
+        if let Some(connected) = self.connected.take() {
+            let endpoint = connected.endpoint;
+            let _ = self
+                .runtime
+                .block_on(async { tokio::time::timeout(CLOSE_FLUSH, endpoint.wait_idle()).await });
+        }
     }
 }
 pub type Callback = unsafe extern "C" fn(*mut c_void, u32, *const u8, u32);
@@ -151,6 +161,7 @@ pub unsafe extern "C" fn cgp_connect(
                     != Some(expected)
                 {
                     connected.connection.close(1u32.into(), b"untrusted peer");
+                    let _ = tokio::time::timeout(CLOSE_FLUSH, connected.endpoint.wait_idle()).await;
                     bail!("peer fingerprint mismatch");
                 }
                 let peer = Peer::without_open_connect(
