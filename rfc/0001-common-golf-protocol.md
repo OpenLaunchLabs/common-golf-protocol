@@ -3,11 +3,17 @@
 | | |
 |---|---|
 | Document | 0001 |
-| Status | Draft 2 |
-| Protocol version | 0.2.0 |
-| ALPN | `common-golf/draft-2` |
+| Status | Draft 3 discussion (unreleased) |
+| Protocol version | 0.3.0 (proposed) |
+| ALPN | `common-golf/draft-3` |
 | Service type | `_common-golf._udp` |
-| Date | 2026-10-17 |
+| Date | Unreleased |
+
+This working copy proposes draft 3 for discussion. It does not revise the
+published draft-1 or draft-2 wire formats; their schema snapshots remain in
+`schema/draft-1/` and `schema/draft-2/`. The
+[draft-3 profile](../implementations/DRAFT3.md) tracks the proposal and its
+implementation status.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be read as
 in RFC 2119. Everything else is explanation.
@@ -42,12 +48,12 @@ language.
 - **Encryption is built in.** TLS 1.3 is part of the handshake. There is no
   plaintext mode. Nothing on the wire is readable by a packet sniffer.
 - **Both ends have a key.** TLS requires the listener to prove it holds a
-  private key and can ask the connector to do the same, usually by
-  presenting a certificate, which is a public key with a name around it.
-  That public key identifies the holder. This document uses nothing else
-  for identity.
+  private key. This draft requires the connector to do the same. Both
+  present Ed25519 raw public keys (RFC 7250), without X.509 certificates.
+  That public key identifies the holder.
 - **Version negotiation is built in.** The connector names the application
-  protocol in the handshake (ALPN). `common-golf/draft-2` is this draft;
+  protocol in the handshake (ALPN), and may offer more than one.
+  `common-golf/draft-3` is this discussion draft;
   section 3.8 says how that changes.
 - **Streams are cheap and independent.** One connection carries many
   streams. Each is reliable and ordered like a TCP socket, but a slow or
@@ -56,7 +62,7 @@ language.
 - **Declining is built in.** A receiver that does not want a stream tells
   the sender to stop, with a code. No application message is needed.
 - **Connections are cheap too.** A listener serves many connections on one
-  port, each with its own handshake, certificate and streams. There is no
+  port, each with its own handshake, authenticated key and streams. There is no
   reason to assume one client, and no reason to build a product that
   only talks to one thing.
 
@@ -82,7 +88,7 @@ step whichever peer is listening.
 A listener MUST accept more than one connection at a time and MUST NOT
 refuse or drop a connection because another exists. A connector MUST be
 able to hold connections to more than one listener at a time. Every
-connection is independent: its own peer certificate, its own tier, its own
+connection is independent: its own authenticated peer key, its own tier, its own
 open channels, its own private-channel arrangements, its own `shot_number`
 sequence.
 
@@ -104,7 +110,16 @@ DNS-SD over mDNS (RFC 6762, RFC 6763):
 | Service type | `_common-golf._udp.local.` |
 | Instance name | Human-readable device name |
 | SRV | The host and the port the listener actually bound |
-| TXT | `vendor`, `model`, `serial` (all optional, all strings) |
+| TXT | `key` (required); `vendor`, `model`, `serial` (optional); all strings |
+
+`key` is the listener's Ed25519 public key written as a fingerprint
+(section 4): 64 lowercase hex characters, the same key the listener
+presents in the handshake. A listener MUST include it. A connector MUST
+reject a discovery record whose `key` is missing or is not exactly 64
+lowercase hex characters. A listener whose key changes MUST re-announce
+its TXT record (RFC 6762, section 8.4) so that caches drop the old value.
+Like `serial`, an advertised key lets anyone on the network recognise the
+listener when it reappears. What a connector may do with it is in section 4.
 
 A connector MUST find listeners by browsing for that service type.
 Discovery is REQUIRED on both ends; it is not a convenience layered over
@@ -131,18 +146,33 @@ wifi that blocks multicast does not. If a vendor insists on a diagnostic
 override for support staff, it belongs in a configuration file or a
 support tool, never in the product.
 
-### 3.3 Certificates
+### 3.3 Raw public keys
 
-A listener MUST present a certificate; TLS requires it. A connector SHOULD
-present one, and a listener SHOULD request it, so that both sides can be
-identified. A connector that presents none is treated as a maker (section
-4). A self-signed certificate generated on first run is sufficient and
-expected, and so is a raw public key (RFC 7250) where the library supports
-it. The key MUST be Ed25519, so that every identity is the same 32 bytes.
-Certificate validity dates MUST be ignored, so a device with no clock is
-conforming. No certificate authority is involved anywhere. Use a QUIC
-library that brings its own TLS; the TLS built into Windows cannot do
-Ed25519 and is the wrong choice here for other reasons too.
+Both endpoints MUST authenticate with Ed25519 raw public keys using
+[RFC 7250](https://www.rfc-editor.org/rfc/rfc7250.html). The TLS
+`server_certificate_type` and `client_certificate_type` extensions MUST
+negotiate `RawPublicKey` in both directions. Endpoints MUST NOT offer,
+accept, or fall back to X.509 certificates for this draft.
+
+The listener MUST request the connector's key during the TLS handshake,
+and the connector MUST present it. Each endpoint MUST verify the peer's
+proof of possession. A missing key, a key of another algorithm, or failed
+proof of possession MUST fail the handshake; an anonymous connector is
+not a maker. An authenticated but unregistered key is a maker (section 4).
+
+RFC 7250 carries the key as DER-encoded SubjectPublicKeyInfo in the TLS
+Certificate message, not as an X.509 certificate. The identity and discovery
+fingerprint are the underlying 32 Ed25519 public-key bytes (section 4),
+not that DER encoding. A key generated on first run and retained across
+restarts is sufficient. No certificate authority, certificate name, or
+certificate validity date is involved; a device with no clock can conform.
+Use a QUIC/TLS library that supports Ed25519 raw public keys in both roles.
+
+Listeners MUST NOT depend on TLS Server Name Indication (SNI). A listener
+MUST accept an otherwise valid handshake with no SNI and MUST NOT require
+a particular SNI value to select its key or the CGP service. Discovery
+supplies the destination, ALPN selects the protocol, and the authenticated
+key supplies identity.
 
 This document takes no position on 0-RTT early data. Early data can be
 replayed by someone on the path (RFC 9001, section 9.2), but nearly every
@@ -227,13 +257,15 @@ closes a connection that has carried nothing for the negotiated idle
 timeout, and library defaults are 30 to 60 seconds, so a connection that
 only speaks when a ball is struck will be gone before the next swing.
 
-Endpoints MUST keep an idle connection alive with QUIC PING frames. Every
-library exposes this as a keep-alive interval; no application heartbeat
-message is defined because QUIC already has one. Endpoints MUST advertise
-an idle timeout of at least 60 seconds. The effective timeout is the
-smaller of the two peers' values, so both sides need the floor. A
-keep-alive every 15 seconds with an idle timeout of 90 seconds is
-RECOMMENDED.
+Endpoints MUST keep an idle connection alive with QUIC PING frames using a
+5-second keep-alive interval. No application heartbeat message is defined
+because QUIC already has one. Endpoints MUST advertise `max_idle_timeout`
+of 30,000 milliseconds (30 seconds). Both sides use that value, so the
+negotiated idle timeout is 30 seconds. Idle expiry and timer resets follow
+[RFC 9000, section 10.1](https://www.rfc-editor.org/rfc/rfc9000.html#section-10.1),
+including its minimum of three times the current probe timeout (PTO).
+Keep-alive traffic preserves a healthy connection between shots; unanswered
+PINGs do not keep an unreachable peer's connection alive indefinitely.
 
 ### 3.7 Streams and channels
 
@@ -256,8 +288,15 @@ section 2). The rules below exist because of that.
 
 The ALPN string names the wire format. While this document is a draft,
 each draft has its own string, `common-golf/draft-1`, `common-golf/draft-2`,
-and drafts MAY break each other. Two peers on different drafts fail the
-QUIC handshake, which is the intended failure: nothing half-works.
+and drafts MAY break each other.
+
+A connector MAY offer several strings in one handshake, and a listener MAY
+accept several. Ordinary TLS ALPN selection picks one: the listener chooses
+from the connector's list, by its own preference. The chosen string governs
+the whole connection; peers MUST NOT mix drafts within it. Two peers with no
+string in common fail the QUIC handshake, which is the intended failure:
+nothing half-works. An implementation that wants to support two drafts
+offers or accepts both strings; it does not need any other mechanism.
 
 The string moves only for a change that is not additive: a field or
 channel removed or renamed, or a meaning changed. Adding an optional field
@@ -267,6 +306,7 @@ or a channel does not move it. Every string so far, and why it moved:
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
 | `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
+| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, and new connection timers |
 
 At 1.0 the string becomes `common-golf/1`. From then on every change under
 that string is additive: new optional fields, new channels. The rules that
@@ -282,16 +322,12 @@ NOT make decisions on it; the ALPN already did.
 Identity is the peer's Ed25519 public key: 32 bytes, written as 64
 lowercase hex characters. Call it the fingerprint, since that is what
 everyone will call it anyway. It is the key itself, not a hash of it and
-not a hash of the certificate.
+not a hash of its SubjectPublicKeyInfo encoding.
 
-That is on purpose. A certificate also carries a serial number, dates and
-a name, so the same key wrapped twice would differ, and regenerating a
-certificate would change a device's identity. The handshake proved
-possession of the key; the certificate was only the envelope. Keying on
-the bare key also means one registration covers an implementation that
-presents the same key through a different transport, through a raw
-public key handshake, or in another protocol that identifies peers by
-Ed25519 key, of which there are several.
+The handshake proves possession of the key. Keying on the bare key means
+one registration also covers an implementation that presents the same key
+through a different transport or another protocol that identifies peers
+by Ed25519 key.
 
 Each endpoint MAY keep a list of fingerprints it knows, each with a tier:
 
@@ -299,12 +335,12 @@ Each endpoint MAY keep a list of fingerprints it knows, each with a tier:
 |---|---|
 | `internal` | The vendor's own software |
 | `developer` | A registered third party |
-| `maker` | Everyone else, including peers that presented no certificate |
+| `maker` | Every authenticated peer whose key is not registered |
 
 An endpoint decides which channels to open toward a peer, and which to read
-from it, by that peer's tier. A device might send plain shots to makers and
-also club data and a private diagnostics channel to developers. A
-tournament simulator might accept shots only from fingerprints it has
+from it, by that peer's tier. A device might send plain
+shots to makers and also club data and a private diagnostics channel to
+developers. A tournament simulator might accept shots only from fingerprints it has
 registered as real hardware.
 
 An endpoint that keeps no list treats every peer as a maker and is
@@ -322,9 +358,34 @@ device, and an implementation that keeps a list SHOULD surface that to the
 user rather than trust it silently. This is the rule SSH uses for known
 hosts, and it is sufficient.
 
+The required advertised `key` (section 3.2) lets a connector apply its list before
+connecting: label each discovered listener by tier, warn about a familiar
+name with an unfamiliar key, or hide listeners it would not serve. The
+advertisement is not authenticated; anyone on the network can advertise
+any key, so it is a claim and not proof. A connector MUST NOT treat an
+advertised key as authentication, and MUST compare it with the key the
+handshake presents. If they differ, the connector MUST close the
+connection before opening any channel and surface it as it would an
+unknown device. It MAY rediscover and retry once, because a listener that
+has just changed its key can leave a stale record in caches. Copying a
+registered key into a fake advertisement therefore earns a misleading
+label and a failed connection, never a session. A connector SHOULD keep
+every advertisement that claims a given key and try each of them, so that
+a fake cannot hide the real listener.
+
+A key identifies whoever holds it, which may be an organisation or a
+product line rather than a single unit. Several listeners can advertise
+and present the same key at once; they are separate listeners, and a
+connector MUST NOT merge them or choose between them by key alone. Keys
+also change. A vendor rotates by issuing a new key and replacing the old
+entry on the lists that hold it. Expiry, if a vendor wants it, is a date
+kept beside the entry on the list. Raw public keys carry no expiry date
+(section 3.3).
+
 This is the whole security model. There are no signatures inside messages,
-no nonces, no canonical JSON. If a device keeps its key in hardware,
-matching its fingerprint means talking to that device.
+no nonces, no canonical JSON. Matching a fingerprint means talking to a
+holder of that key. If the key lives in hardware in a single unit, that
+holder is that unit.
 
 ## 5. Channels
 
@@ -376,13 +437,13 @@ The first message each side sends, on the first stream it opens. Required.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `protocol_version` | string | yes | Semver of this document, `0.2.0` |
+| `protocol_version` | string | yes | Semver of this discussion draft, `0.3.0` |
 | `name` | string | | Display name |
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
 
 ```json
-{"type": "info", "protocol_version": "0.2.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
+{"type": "info", "protocol_version": "0.3.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
 ```
 
 ### 5.1 Channel 1: `shot`
