@@ -2,10 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Common Golf Protocol channel 7: result (simulator's computed outcome, not an acknowledgement)",
   "type": "object",
-  "required": ["type", "shot_number"],
+  "required": ["type", "shot_uuid"],
   "properties": {
     "type": {"const": "result"},
-    "shot_number": {"type": "integer", "minimum": 1},
+    "shot_uuid": {
+      "type": "string",
+      "format": "uuid",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 in lowercase hyphenated form. Copy the source shot's shot_uuid to correlate its result; independent of measured_at."
+    },
     "accepted": {"type": "boolean"},
     "reject_reason": {"type": "string"},
     "carry_distance_meters": {"type": "number", "minimum": 0},

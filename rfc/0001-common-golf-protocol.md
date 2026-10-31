@@ -89,8 +89,8 @@ A listener MUST accept more than one connection at a time and MUST NOT
 refuse or drop a connection because another exists. A connector MUST be
 able to hold connections to more than one listener at a time. Every
 connection is independent: its own authenticated peer key, its own tier, its own
-open channels, its own private-channel arrangements, its own `shot_number`
-sequence.
+open channels, and its own private-channel arrangements. A source shot keeps
+its `shot_uuid` when sent to several peers or replayed after a reconnect.
 
 This is normal, not exceptional. A launch monitor on a range is talking to
 the simulator, the vendor's phone app, a coaching tool and a diagnostics
@@ -279,8 +279,8 @@ section 2). The rules below exist because of that.
 - One stream per channel per direction per connection. A second stream
   for a channel that is already open is declined with code 1.
 - After a stream ends, by FIN or reset, the sender MAY reopen the channel
-  on a new stream. Counters such as `shot_number` continue; they do not
-  restart.
+  on a new stream. Reopening does not change shot identities: messages
+  about the same shot retain its `shot_uuid`. A new shot gets a new UUIDv7.
 - On the two-way channel 2 only the opener writes the channel prefix. The
   responder writes framed messages on the same stream and nothing else.
 
@@ -306,7 +306,7 @@ or a channel does not move it. Every string so far, and why it moved:
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
 | `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
-| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, and new connection timers |
+| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, new connection timers, and UUIDv7 whole-snapshot shot identity without `final` |
 
 At 1.0 the string becomes `common-golf/1`. From then on every change under
 that string is additive: new optional fields, new channels. The rules that
@@ -414,7 +414,7 @@ else is optional and independent.
 
 Channels 1 and 2 may both be open on one connection, but a device MUST NOT
 send the same shot on both: a simulator cannot reliably match an Open
-Connect `ShotNumber` to a `shot_number` and would count it twice. A device
+Connect `ShotNumber` to a `shot_uuid` and would count it twice. A device
 SHOULD use one shot channel per connection, channel 1 by default. Section
 5.2 says what channel 2 is for.
 
@@ -427,9 +427,49 @@ Rules for every standard channel:
 - Senders MUST NOT send fields with the wrong unit under a known name.
 - Nothing is acknowledged. A sender never waits for a reply. Where a
   simulator has something to say about a shot, it publishes a `result` on
-  its own channel, and a device that cares correlates by `shot_number`.
+  its own channel, and a device that cares correlates by `shot_uuid`.
 
 JSON Schema for each channel is in `schema/`.
+
+Shot identity on channels 1, 3, 7, and 8 uses the single field name
+`shot_uuid`. The source generates a new UUIDv7 for each new shot, as defined
+in [RFC 9562, section 5.7](https://www.rfc-editor.org/rfc/rfc9562.html#section-5.7).
+All messages about that shot, including related club measurements, computed
+flight, and simulator results, MUST reuse its `shot_uuid`. Updates and
+replays MUST retain it, including across stream reopenings and reconnects.
+
+A `shot_uuid` MUST use exactly 36 ASCII characters in lowercase,
+hyphenated `8-4-4-4-12` form, with version 7 and the RFC UUID variant.
+Its decoded JSON string MUST match this pattern and have length 36:
+
+```text
+^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+```
+
+For example, `017f22e2-79b0-7cc3-98c4-dc0c0c07398f` is valid. Uppercase or
+mixed-case strings, braces, URN prefixes, missing hyphens, and other UUID
+versions are invalid. Receivers compare the canonical strings byte for byte;
+they MUST NOT normalize an invalid spelling into a valid one. An invalid
+`shot_uuid` is malformed under section 3.4. The schemas enforce the length
+and pattern explicitly; `format: "uuid"` alone is not sufficient.
+
+`shot_uuid` is an identity, separate from `measured_at`. The timestamp
+embedded in UUIDv7 is used by UUID generation; receivers MUST NOT use it
+as the measurement time. `measured_at`, when known, carries the actual
+measurement time independently. Neither timestamp determines which update
+replaces another.
+
+A later message with the same `shot_uuid` on the same channel replaces
+the earlier message whole. Each message is a complete snapshot, not a
+patch: an optional field omitted from the replacement is gone. Receivers
+MAY accept these replacements, or keep the first message and ignore later
+ones for that UUID on that channel. If a receiver accepts a replacement,
+it MUST replace the whole earlier snapshot rather than merge fields or
+count another shot. Here "later" means receive order on that channel,
+including after the stream is reopened. A matching UUID on another
+channel correlates related information; it does not replace that other
+channel's snapshot. There is no `final` field or completion marker, and
+receivers need not wait for another message before using a snapshot.
 
 ### 5.0 Channel 0: `info`
 
@@ -453,19 +493,17 @@ here; that is channel 8.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `shot_number` | integer | yes | Increments per device per connection |
+| `shot_uuid` | string | yes | Canonical UUIDv7; see section 5 |
 | `ball_speed_meters_per_second` | number | yes | |
 | `vertical_launch_angle_degrees` | number | yes | Positive is up |
 | `horizontal_launch_angle_degrees` | number | yes | Positive is right of target |
 | `total_spin_revolutions_per_minute` | number | with axis | Positive is backspin, negative is topspin |
 | `spin_axis_degrees` | number | with total | -90 to 90. 0 is no curve; positive curves right, whatever the sign of total |
 | `backspin_revolutions_per_minute`, `sidespin_revolutions_per_minute` | number | | Only in addition to total and axis; positive sidespin curves right |
-| `measurement_id` | string | | Globally unique; lets a simulator dedupe across reconnects |
-| `measured_at_nanoseconds` | integer | | Nanoseconds since an unspecified epoch; monotonic is fine |
+| `measured_at` | string | | UTC RFC 3339 measurement timestamp; independent of `shot_uuid`. Omit if unknown |
 | `player_dexterity` | `right`, `left`, `unknown` | | See section 7 |
 | `tee_position` | `tee`, `mat`, `ground`, `unknown` | | Where the ball was struck from |
 | `estimated` | array of string | | Names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy. See section 7 |
-| `final` | boolean | | See below. Absent means final |
 | `shot_kind` | `full`, `putt`, `chip` | | |
 
 Spin has one canonical form: total and axis, sent together or not at all,
@@ -496,18 +534,16 @@ as spin, can be omitted. The example supplies all three required launch
 measurements and uses the existing `shot_kind` field:
 
 ```json
-{"type": "shot", "shot_number": 13, "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"], "shot_kind": "putt"}
+{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"], "shot_kind": "putt"}
 ```
 
-A device MAY send more than one `shot` for the same `shot_number` as its
-estimate refines, each with `final: false` until the last, which carries
-`final: true`. Each message is a complete snapshot that replaces the
-previous one for that `shot_number`; nothing is merged, so a field present
-in the preliminary and absent in the final is gone. A simulator that does
-not want preliminaries ignores messages with `final: false`.
+A device MAY send more than one `shot` with the same `shot_uuid` as its
+estimate refines. Each is a complete snapshot under section 5's optional
+replacement rules. A simulator that accepts replacements updates that shot
+without counting it again; one that does not may ignore subsequent snapshots.
 
 ```json
-{"type": "shot", "shot_number": 12, "ball_speed_meters_per_second": 67.3, "vertical_launch_angle_degrees": 12.1, "horizontal_launch_angle_degrees": -1.4, "total_spin_revolutions_per_minute": 2750, "spin_axis_degrees": -3.2, "player_dexterity": "right", "measurement_id": "2f1c…"}
+{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 67.3, "vertical_launch_angle_degrees": 12.1, "horizontal_launch_angle_degrees": -1.4, "total_spin_revolutions_per_minute": 2750, "spin_axis_degrees": -3.2, "player_dexterity": "right", "measured_at": "2022-02-22T19:22:21.950Z"}
 ```
 
 ### 5.2 Channel 2: `open_connect`
@@ -545,14 +581,16 @@ simulator writes only framed replies.
 
 ### 5.3 Channel 3: `club`
 
-What the device measured about the club. Every field is optional. With
-`shot_number` it describes the club at impact for that shot. Without it,
-and with `swing_number`, it is a standalone swing from a device with no
-ball data, such as a swing-speed radar.
+What the device measured about the club. Every field is optional. A
+`shot_uuid` shared with a `shot` message correlates the club at impact with
+that shot. A standalone swing from a device with no ball data, such as a
+swing-speed radar, MAY have its own `shot_uuid` without any channel-1
+message. If the identifier is omitted, no UUID-based correlation or
+replacement is possible.
 
 | Field | Notes |
 |---|---|
-| `shot_number` or `swing_number` | integer |
+| `shot_uuid` | Canonical UUIDv7; shared with a related shot or generated for a standalone swing |
 | `club_speed_meters_per_second` | |
 | `angle_of_attack_degrees` | Positive is upward |
 | `club_path_degrees` | Positive is right of target |
@@ -571,7 +609,6 @@ ball data, such as a swing-speed radar.
 | `closure_rate_degrees_per_second` | |
 | `player_dexterity` | See section 7 |
 | `estimated` | As on channel 1: names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy |
-| `final` | As on channel 1: each message for a `shot_number` replaces the previous one whole |
 
 Timing guidance (informative). For low latency, a simulator can start an
 accepted ball shot from channel 1 without waiting for optional club data on
@@ -580,16 +617,15 @@ data promptly, and aiming to finish useful refinements within ten seconds
 of the shot or before the next shot, whichever comes first, keeps that
 analysis timely. This is
 application guidance, not a protocol deadline or a receiver timeout. The
-existing `final` flag and whole-snapshot replacement rules still apply.
+whole-snapshot replacement rules in section 5 apply; there is no final flag.
 
-A standalone club tracker has its own connection and `swing_number`
-sequence. It is not automatically correlated with another device's
-`shot_number`. Associating a nearby swing with a ball shot for display is a
-local heuristic; it need not delay ball simulation or change either
-device's counters.
+A standalone club tracker can generate its own `shot_uuid`. It is not
+automatically correlated with another device's ball-shot UUID. Associating
+a nearby swing with a ball shot for display is a local heuristic; it need
+not delay ball simulation or change either source's shot identity.
 
 ```json
-{"type": "club", "swing_number": 3, "club_speed_meters_per_second": 47.1}
+{"type": "club", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "club_speed_meters_per_second": 47.1}
 ```
 
 ### 5.4 Channel 4: `status`
@@ -661,7 +697,7 @@ either success or failure.
 
 | Field | Notes |
 |---|---|
-| `shot_number` | required |
+| `shot_uuid` | required; canonical UUIDv7 |
 | `accepted` | boolean |
 | `reject_reason` | string, when not accepted |
 | `carry_distance_meters`, `total_distance_meters` | |
@@ -672,7 +708,7 @@ either success or failure.
 
 The device's own computed ball flight, when it offers one. Kept apart from
 channel 1 so a simulator that runs its own physics never confuses a
-measurement with a derived value. `shot_number` required, rest optional.
+measurement with a derived value. `shot_uuid` required, rest optional.
 
 | Field |
 |---|
@@ -680,7 +716,6 @@ measurement with a derived value. `shot_number` required, rest optional.
 | `total_distance_meters`, `total_side_meters` |
 | `max_height_meters`, `curve_meters` |
 | `landing_angle_degrees`, `hang_time_seconds` |
-| `final`, as on channel 1: each message for a `shot_number` replaces the previous one whole |
 
 Trajectories as point arrays are deliberately not carried. They are library
 output; see OpenGolfCoach.
@@ -730,8 +765,10 @@ and positive face angle is open; for a left-handed player each is the
 opposite. `unknown` is a legitimate value when the device cannot tell. The
 wire never carries two handed variants of a number.
 
-Timestamps are nanoseconds since an epoch the sender does not have to
-define. Monotonic since boot is fine.
+`measured_at` is an optional UTC RFC 3339 measurement timestamp, including
+fractional seconds when available. Omit it if the measurement's UTC time is
+unknown; do not substitute uptime or the timestamp embedded in `shot_uuid`.
+The UUID identifies the shot independently of `measured_at`.
 
 A device that could not measure a value for this shot and sends one
 anyway, or that believes a value it sends has reduced accuracy, MUST name
@@ -753,7 +790,7 @@ rpm, degrees and yards:
 
 | Open Connect | Common Golf | Factor |
 |---|---|---|
-| `ShotNumber` | `shot_number` | |
+| `ShotNumber` | `shot_uuid` | Allocate a UUIDv7 per source shot and retain the mapping for related messages and updates |
 | `BallData.Speed` | `ball_speed_meters_per_second` | × 0.44704 |
 | `BallData.VLA` | `vertical_launch_angle_degrees` | |
 | `BallData.HLA` | `horizontal_launch_angle_degrees` | |
@@ -794,8 +831,11 @@ Nova's WebSocket feed is already snake_case SI and maps by rename:
 `horizontal_launch_angle_degrees` and `spin_axis_degrees` are identical;
 `total_spin_rpm` becomes `total_spin_revolutions_per_minute`, negative
 topspin included;
-`timestamp_ns` becomes `measured_at_nanoseconds`; `status.uptime_seconds`
-and `status.firmware_version` go to `status` and `info`. Nova's TCP API is
+`timestamp_ns` can become `measured_at` only when its epoch is known and
+can be converted to UTC RFC 3339; otherwise omit the measurement timestamp.
+Assign the source shot a separate UUIDv7 and retain it for related messages
+and updates. `status.uptime_seconds` and `status.firmware_version` go to
+`status` and `info`. Nova's TCP API is
 Open Connect and goes on channel 2. Nova's touch bar maps to `control`:
 Left and Right to `left` and `right`, A to `reset_aim`, Y to `heatmap`.
 
@@ -814,20 +854,21 @@ channels carrying JSON, one recording convention is:
 
 | MCAP | Value |
 |---|---|
-| Schema | `encoding: "jsonschema"`, with data from the matching file under `schema/draft-2/`; use channel `schema_id: 0` when no schema is available |
-| Channel | A recorder-chosen `topic`, such as `<connection>/<sender>/shot`; `message_encoding: "json"`; string metadata such as `{"channel_id": "1", "alpn": "common-golf/draft-2"}` |
+| Schema | `encoding: "jsonschema"`, with data from the schema set for the recorded ALPN (`schema/` for this proposal; frozen directories for earlier drafts); use channel `schema_id: 0` when no schema is available |
+| Channel | A recorder-chosen `topic`, such as `<connection>/<sender>/shot`; `message_encoding: "json"`; string metadata such as `{"channel_id": "1", "alpn": "common-golf/draft-3"}` |
 | Message data | Original JSON payload bytes, excluding the CGP channel prefix and length header |
 | Message times | `log_time`: recorder receipt time in nanoseconds; `publish_time`: the same value when publication time is unavailable |
-| Message sequence | A recorder counter per recorded channel, or zero when unused; distinct from `shot_number` |
+| Message sequence | A recorder counter per recorded channel, or zero when unused; distinct from `shot_uuid` |
 
 These labels and metadata are local to the recording, not additional wire
 fields. Including the connection and sender separates both directions of
-`info` and Open Connect traffic, and keeps different devices' shot counters
-apart. MCAP channel IDs are file-local and need not match CGP channel numbers.
+`info` and Open Connect traffic, and identifies the source connection
+independently of shot identity. MCAP channel IDs are file-local and need not match CGP channel numbers.
 
 MCAP timestamps use an epoch understood by the recording's users. The
-payload's `measured_at_nanoseconds` stays unchanged: its epoch may be uptime,
-and measurement time is not necessarily publication or receipt time. The
+payload's `measured_at` stays unchanged: measurement time is not necessarily
+publication or receipt time. Earlier-draft `measured_at_nanoseconds` also
+stays in the payload, and its unspecified epoch may be uptime. The
 [MCAP encoding registry](https://mcap.dev/spec/registry) describes the JSON
 and JSON Schema encodings. Non-JSON private channels need their own recording
 encoding; this convention does not reinterpret their bytes as JSON.
@@ -852,7 +893,7 @@ be omitted; section 5.1 illustrates estimating a required launch measurement.
 
 | Pureplay Connect | Common Golf |
 |---|---|
-| `ShotId` | Allocate increasing `shot_number` values on each CGP connection; retain the source-session/`ShotId` mapping for related ball/club messages and updates |
+| `ShotId` | Allocate a UUIDv7 `shot_uuid` per source shot; retain the source-session/`ShotId` mapping across connections, related ball/club messages, and updates |
 | `BallSpeedMS`, `VLA`, `HLA` | `ball_speed_meters_per_second`, `vertical_launch_angle_degrees`, `horizontal_launch_angle_degrees` |
 | `TotalSpinRPM`, `SpinAxisDeg` | Total and axis, after checking the source sign convention |
 | `BackSpinRPM`, `SideSpinRPM` without total and axis | Convert with section 5.1, preserving topspin sign |
