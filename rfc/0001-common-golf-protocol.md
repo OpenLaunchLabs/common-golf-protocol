@@ -192,13 +192,15 @@ early data.
 
 ### 3.4 Framing
 
-Every stream begins with the channel ID:
+The opener begins every reliable stream with the channel ID. A reply on
+that same bidirectional stream does not repeat it:
 
 ```
 channel_id: 4 octets, unsigned, big-endian
 ```
 
-Every message after that is:
+For standard channels and custom contracts using framed JSON, every message
+after that is:
 
 ```
 length:  4 octets, unsigned, big-endian, counting payload only
@@ -253,7 +255,8 @@ close the connection. Section 3.9 defines the lifecycle rules, including
 the temporary wait for a custom-channel menu; that wait is not a decline.
 
 A stream for a channel the opener does not own (section 5), or a second
-stream for a channel the opener already has open, is declined the same way.
+framed-JSON stream for a channel the opener already has open, is declined
+the same way. Raw contracts can permit concurrent streams (section 6).
 
 | Code | Name | Sent as | Meaning |
 |---|---|---|---|
@@ -290,8 +293,10 @@ section 2). The rules below exist because of that.
   before `info`, because the network may reorder streams. Standard channels
   do not wait for the peer's `info`. Custom channels use the listener's menu
   under the lifecycle rules in section 3.9.
-- One stream per channel per direction per connection. A second stream
-  for a channel that is already open is declined with code 1.
+- Standard channels and framed-JSON custom contracts allow one stream per
+  channel per direction per connection. A second stream for a channel that
+  is already open is declined with code 1. Raw contracts may use multiple
+  independent concurrent streams on the same channel (section 6).
 - After a stream ends, by FIN or reset, the sender MAY reopen the channel
   on a new stream unless it has received code 1 for that channel on this
   connection (section 3.9). Code 2 still permits reopening. Reopening does
