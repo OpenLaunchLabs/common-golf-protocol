@@ -16,6 +16,7 @@
 #endif
 
 #define CGP_CHANNELS 9
+#define CGP_MAX_RAW_STREAMS 16
 #define CGP_TX_LIMIT (4 * 65543)
 /* Streams the remote may open (QUIC transport parameters), plus room for our
  * own. Tracking covers every stream a well-behaved peer can open, so refusals
@@ -36,17 +37,24 @@ typedef struct cgp_buffer {
 typedef struct cgp_stream {
     struct cgp_stream *next;
     int64_t id;
-    bool outgoing, stopped, fin_requested, fin_sent, assigned;
+    bool outgoing, stopped, awaiting_close, fin_requested, fin_sent, assigned;
     unsigned channel;
     cgp_rx rx;
     cgp_buffer *head, *tail;
     uint64_t next_offset;
+    uint8_t *held;
+    size_t held_length;
+    bool held_fin, pending_menu, replaying, transport_closed;
 } cgp_stream;
 
 typedef struct {
     uint32_t channel;
     cgp_private_kind kind;
     char contract[257];
+    uint64_t sequence;
+    bool exhausted, declined;
+    uint8_t *pending;
+    size_t pending_length;
 } cgp_binding;
 #define CGP_MAX_BINDINGS 16
 
@@ -61,11 +69,14 @@ typedef struct cgp_peer {
     uint64_t created, next_action, release_at;
     bool ready, started, failed;
     bool notified, info_sent;
-    char fingerprint[65], tier[16];
+    char fingerprint[65], expected_key[65], tier[16];
+    bool menu_seen, menu_valid;
+    unsigned datagram_cursor;
     void *user_data;
     cgp_binding bindings[CGP_MAX_BINDINGS];
     int64_t write_cursor;
     unsigned shot_number, held_arrow;
+    char shot_uuid[37];
     bool holding;
     cgp_stream *streams;
     int64_t tx[CGP_CHANNELS], rx[CGP_CHANNELS];
@@ -93,3 +104,8 @@ bool cgp_json_valid(const char *json, size_t length);
 cJSON *cgp_json_extract(const char *json, size_t length);
 
 cgp_binding *cgp_find_binding(cgp_peer *, uint32_t);
+
+bool cgp_uuid_json_valid(const char *, size_t, bool required);
+bool cgp_menu_receive(cgp_peer *, const char *, size_t);
+char *cgp_menu_info(cgp_peer *, const char *);
+bool cgp_open_connect(const cgp_peer *, uint32_t);

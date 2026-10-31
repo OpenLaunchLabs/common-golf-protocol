@@ -11,6 +11,7 @@ from zeroconf import IPVersion, ServiceInfo, ServiceListener
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 from .protocol import Draft, SERVICE
+from .identity import validate_key
 
 
 @dataclass(frozen=True)
@@ -31,14 +32,18 @@ def local_ip():
 
 
 @asynccontextmanager
-async def listen(name, identity, create_protocol, *, draft=Draft.TWO, properties=None):
+async def listen(name, identity, create_protocol, *, draft=Draft.THREE, properties=None):
     """Bind an ephemeral port, advertise it, serve independent connections."""
     server = await serve("0.0.0.0", 0, configuration=identity.configuration(is_client=False, draft=draft),
                          create_protocol=create_protocol)
     port = server._transport.get_extra_info("sockname")[1]
     zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+    properties = dict(properties or {})
+    if Draft(draft) == Draft.THREE:
+        properties["key"] = identity.fingerprint
+        properties.setdefault("alpn", "draft-3")
     info = ServiceInfo(SERVICE, f"{name}.{SERVICE}", addresses=[socket.inet_aton(local_ip())],
-                       port=port, properties=properties or {}, server=f"cgp-{identity.fingerprint[:12]}.local.")
+                       port=port, properties=properties, server=f"cgp-{identity.fingerprint[:12]}.local.")
     registered = False
     try:
         await zc.async_register_service(info)
@@ -85,7 +90,8 @@ async def discover(seconds=3.0):
     return list(found.values())
 
 
-def dial(peer, identity, create_protocol, *, draft=Draft.TWO):
+def dial(peer, identity, create_protocol, *, draft=Draft.THREE):
     """Connect to a DiscoveredPeer; use one context per independent listener."""
-    return connect(peer.host, peer.port, configuration=identity.configuration(is_client=True, draft=draft),
+    expected_key = validate_key(peer.properties.get("key")) if Draft(draft) == Draft.THREE else None
+    return connect(peer.host, peer.port, configuration=identity.configuration(is_client=True, draft=draft, expected_key=expected_key),
                    create_protocol=create_protocol)

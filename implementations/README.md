@@ -14,18 +14,25 @@ Each library also builds a diagnostic peer for the compatibility tests:
 |---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | `shot.reduced_accuracy` |
 | `common-golf/draft-2` | 0.2.0 | `shot.estimated`, `club.estimated` |
+| `common-golf/draft-3` (proposal) | 0.3.0 | `shot.estimated`, `club.estimated` |
 
-The [RFC](../rfc/0001-common-golf-protocol.md) defines draft 2, and new
-applications should use it. Draft 1 support lets the tests cover older peers
-and ALPN mismatches. Behavior follows the ALPN; `info.protocol_version` is
-informational.
+The [RFC](../rfc/0001-common-golf-protocol.md) and [draft 3 profile](DRAFT3.md)
+describe the unreleased discussion proposal implemented here. Drafts 1 and 2
+remain separate compatibility profiles. Behavior follows the ALPN;
+`info.protocol_version` is informational.
 
-All three libraries provide persistent Ed25519 identities with raw-public-key
-fingerprints, 15 s QUIC keep-alives, a 90 s idle timeout, channel ownership
-checks, per-stream rejection, and explicitly configured private JSON channels.
-Applications supply measurements, shot counters, trust lists, and channel
-policy. JSON Schemas are used by the tests only; the libraries do not validate
-message content.
+Draft 3 uses mutual Ed25519 raw public keys, requires the discovery TXT key
+and checks it before application traffic, and uses 5 s keep-alives with a 30 s
+idle timeout. All three libraries implement listener menus, custom JSON and
+Open Connect contracts, raw streams, datagrams, and UUIDv7 shot identities.
+Drafts 1/2 retain their 15 s / 90 s timing and private-channel behavior.
+The Rust transport keeps draft 3 and legacy TLS profiles in separate endpoint
+configurations; it does not offer both profiles in one handshake.
+
+Applications supply measurements, trust lists, and channel policy. Libraries
+enforce transport, menu, and shot-identity rules; full message-schema and
+cross-field validation remains in the test harness. Shot snapshots replace
+earlier snapshots for the same UUID and channel, without a `final` field.
 
 ## Build and test
 

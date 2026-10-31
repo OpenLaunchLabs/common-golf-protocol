@@ -1,6 +1,7 @@
 """Launch native C subprocesses and exchange real QUIC traffic with Python peers.
 
-The cgp_host executable uses the firmware's C transport on the host. Python
+The cgp_host executable uses draft 3; cgp_host_draft2 retains the explicitly
+selected legacy firmware transport profile. Python
 controls subprocesses and loopback connections; it does not call C through FFI.
 These tests require no board and do not exercise Wi-Fi or DNS-SD discovery.
 """
@@ -20,13 +21,19 @@ EXAMPLES = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(EXAMPLES))
 import common_golf as cg
 
-SCHEMAS = {number: json.loads((EXAMPLES.parent / "schema" / f"{name}.json").read_text())
+SCHEMAS = {number: json.loads((EXAMPLES.parent / "schema" / "draft-2" / f"{name}.json").read_text())
            for name, number in cg.CHANNELS.items()}
 
 
 class Native:
-    def __init__(self, executable, role, *ports):
+    def __init__(self, executable, role, *ports, draft):
         self.arguments = [str(executable), role, *map(str, ports)]
+        self.schemas = SCHEMAS if draft == 2 else {
+            number: json.loads((EXAMPLES.parent / "schema" / f"{name}.json").read_text())
+            for name, number in {"info": 0, "shot": 1, "club": 3, "device_status": 4,
+                                 "control": 5, "simulator_state": 6, "result": 7, "flight": 8}.items()
+        }
+        self.key = None
         self.lines = []
         self.process = None
 
@@ -48,6 +55,8 @@ class Native:
             self.lines.append(text)
             if os.environ.get("CGP_TEST_VERBOSE"):
                 print(self.arguments[1], text, flush=True)
+            if text.startswith("KEY "):
+                self.key = text.split()[1]
             if text.startswith("PORT ") and not self.port_ready.done():
                 self.port_ready.set_result(int(text.split()[1]))
         if not self.port_ready.done():
@@ -70,7 +79,7 @@ class Native:
             if match:
                 channel = int(match[1])
                 message = json.loads(match[2])
-                jsonschema.validate(message, SCHEMAS[channel])
+                jsonschema.validate(message, self.schemas[channel])
                 found.append((channel, message))
         return found
 
@@ -90,7 +99,7 @@ class Probe(cg.Connection):
     READS_PRIVATE = False
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, role="sim", read_channels=self.READS, **kwargs)
+        super().__init__(*args, role="sim", draft=cg.Draft.TWO, read_channels=self.READS, **kwargs)
         self.messages = []
         self.errors = []
         self.declined = {}
@@ -125,8 +134,8 @@ async def wait_until(predicate, seconds=15):
 async def python_to_native(executable, identity_dir):
     def dial(port, name):
         identity = cg.Identity(identity_dir / name, name)
-        return connect("127.0.0.1", port, configuration=identity.configuration(is_client=True), create_protocol=Probe)
-    async with Native(executable, "launch_monitor") as launch:
+        return connect("127.0.0.1", port, configuration=identity.configuration(is_client=True, draft=cg.Draft.TWO), create_protocol=Probe)
+    async with Native(executable, "launch_monitor", draft=2) as launch:
         # Two independent authenticated connections to one listener.
         async with dial(launch.port, "probe-a") as a, \
                    dial(launch.port, "probe-b") as b:
@@ -168,17 +177,18 @@ async def python_to_native(executable, identity_dir):
             await a.ping()
             await b.ping()
             print("PASS Python <-> native launch monitor: schemas, 2 clients, identity, 64 KB, decline/reopen")
-    async with Native(executable, "control_box") as box:
+    async with Native(executable, "control_box", draft=2) as box:
         async with dial(box.port, "probe-controls") as probe:
             await wait_until(lambda: any(ch == 5 for ch, _ in probe.messages))
             assert not probe.errors, probe.errors
             print("PASS Python <-> native control box: channel 5 schema")
 
 
-async def three_native(executable):
-    async with Native(executable, "launch_monitor") as launch, \
-               Native(executable, "control_box") as box:
-        async with Native(executable, "simulator", launch.port, box.port) as sim:
+async def three_native(executable, *, draft):
+    async with Native(executable, "launch_monitor", draft=draft) as launch, \
+               Native(executable, "control_box", draft=draft) as box:
+        targets = [launch.port, launch.key, box.port, box.key] if draft == 3 else [launch.port, box.port]
+        async with Native(executable, "simulator", *targets, draft=draft) as sim:
             await sim.until(lambda: {0, 1, 3, 4, 5, 8}.issubset({ch for ch, _ in sim.messages()}))
             await launch.until(lambda: {0, 6, 7}.issubset({ch for ch, _ in launch.messages()}))
             assert {0, 6}.issubset({ch for ch, _ in box.messages()})
@@ -197,11 +207,11 @@ async def native_to_python(executable, identity_dir):
         try:
             for index, cls in enumerate(classes):
                 server = await serve("127.0.0.1", 0,
-                                     configuration=cg.Identity(identity_dir / f"python-device-{index}").configuration(is_client=False),
-                                     create_protocol=partial(cls, role="controller" if cls is control_box.Box else "device"))
+                                     configuration=cg.Identity(identity_dir / f"python-device-{index}").configuration(is_client=False, draft=cg.Draft.TWO),
+                                     create_protocol=partial(cls, draft=cg.Draft.TWO, role="controller" if cls is control_box.Box else "device"))
                 servers.append(server)
             ports = [s._transport.get_extra_info("sockname")[1] for s in servers]
-            async with Native(executable, "simulator", *ports) as sim:
+            async with Native(executable, "simulator", *ports, draft=2) as sim:
                 expected = {0, 1, 5} if classes[0] is launch_monitor_minimum.Device else {0, 1, 3, 4}
                 await sim.until(lambda: expected.issubset({ch for ch, _ in sim.messages()})
                                 and any(ch == 1 and message.get("final", True)
@@ -218,13 +228,17 @@ async def native_to_python(executable, identity_dir):
                 server.close()
 
 
-def test_python_peers_with_c_devices(cgp_host, tmp_path):
-    asyncio.run(python_to_native(cgp_host, tmp_path))
+def test_python_peers_with_c_devices(cgp_host_draft2, tmp_path):
+    asyncio.run(python_to_native(cgp_host_draft2, tmp_path))
 
 
-def test_c_roles_with_each_other(cgp_host):
-    asyncio.run(three_native(cgp_host))
+def test_c_roles_with_each_other(cgp_host_draft2):
+    asyncio.run(three_native(cgp_host_draft2, draft=2))
 
 
-def test_c_simulator_with_python_devices(cgp_host, tmp_path):
-    asyncio.run(native_to_python(cgp_host, tmp_path))
+def test_c_simulator_with_python_devices(cgp_host_draft2, tmp_path):
+    asyncio.run(native_to_python(cgp_host_draft2, tmp_path))
+
+
+def test_draft3_c_roles_with_each_other(cgp_host):
+    asyncio.run(three_native(cgp_host, draft=3))

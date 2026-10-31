@@ -28,7 +28,7 @@ static class Program
         IntPtr endpoint;
         if (cgp_create("{}", out endpoint) != -1 || endpoint != IntPtr.Zero)
             throw new Exception("Invalid configuration was accepted");
-        Check(cgp_create("{\"identity_directory\":\"cgp-ffi-identity/csharp\",\"role\":\"simulator\",\"draft\":2,\"info\":{\"type\":\"info\",\"name\":\"C# smoke\",\"protocol_version\":\"0.2.0\"}}", out endpoint));
+        Check(cgp_create("{\"identity_directory\":\"cgp-ffi-identity/csharp\",\"role\":\"simulator\",\"info\":{\"type\":\"info\",\"name\":\"C# smoke\",\"protocol_version\":\"0.3.0\"}}", out endpoint));
         try
         {
             Exception callbackError = null;

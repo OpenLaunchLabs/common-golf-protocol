@@ -6,7 +6,7 @@ import json
 import random
 from pathlib import Path
 
-from common_golf import Connection, Draft, Identity, listen
+from common_golf import Connection, Draft, Identity, listen, new_shot_uuid
 
 
 class Radar(Connection):
@@ -19,7 +19,7 @@ class Radar(Connection):
         while True:
             self.publish(3, {
                 "type": "club",
-                "swing_number": number,
+                **({"shot_uuid": new_shot_uuid()} if self.draft == Draft.THREE else {"swing_number": number}),
                 "club_speed_meters_per_second": round(random.uniform(42.0, 46.0), 2),
             })
             number += 1
@@ -35,7 +35,7 @@ class Radar(Connection):
 
 def main():
     arguments = argparse.ArgumentParser(description=__doc__)
-    arguments.add_argument("--draft", type=int, choices=(1, 2), default=2)
+    arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
     arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")

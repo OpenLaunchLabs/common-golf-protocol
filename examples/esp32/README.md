@@ -5,19 +5,18 @@ built on the [C library](../../implementations/c/README.md). Each board runs
 one role. No sensors, buttons, or wiring are needed.
 
 Devices advertise `_common-golf._udp` on an ephemeral port. The simulator
-discovers them and connects over QUIC/TLS 1.3 with Ed25519 identities. Draft 2
-is the default; the `CGP_DRAFT` menuconfig option selects draft 1. All boards
-must use the same draft.
+discovers them and connects over QUIC with Ed25519 identities. `CGP_DRAFT`
+selects draft 3 (default), 2 or 1; all boards must use the same draft. Shots
+omit `measured_at` because the boards have no synchronized UTC clock.
 
 | Role | Sends | Receives | Behavior |
 |---|---|---|---|
-| `launch_monitor` | 0 info, 1 shot, 3 club, 4 status, 8 flight | 0 info, 6 state, 7 result | Synthetic shot every 3–7 s, marked `estimated` (`reduced_accuracy` on draft 1). |
-| `control_box` | 0 info, 5 control | 0 info, 6 state, 7 result | Random command every 0.5–3 s. Arrow holds send `down`, then `up` 100–500 ms later. |
-| `simulator` | 0 info, 6 state, 7 result | 0 info, 1 shot, 3 club, 4 status, 5 control, 8 flight | Connects to both devices, logs received JSON, and returns placeholder results. |
+| `launch_monitor` | 0 info, 1 shot, 3 club, 4 device_status, 8 flight | 0 info, 6 simulator_state, 7 result | Synthetic shot every 3–7 s, marked `estimated` (`reduced_accuracy` on draft 1). |
+| `control_box` | 0 info, 5 control | 0 info, 6 simulator_state, 7 result | Random command every 0.5–3 s. Arrow holds send `down`, then `up` 100–500 ms later. |
+| `simulator` | 0 info, 6 simulator_state, 7 result | 0 info, 1 shot, 3 club, 4 device_status, 5 control, 8 flight | Connects to both devices, logs received JSON, and returns placeholder results. |
 
-Channel 2 (Open Connect), reserved channels, and private channels are declined
-with `not_interested`. Flight and result values are placeholders, not ball
-physics.
+Reserved and custom channels are declined with `not_interested`. Flight and
+result values are placeholders, not ball physics.
 
 By default the simulator connects only to devices whose mDNS `vendor` is
 `Common Golf example`, `CGP hardware test`, or `Example`, so it ignores real
@@ -79,9 +78,9 @@ Wi-Fi RSSI (dBm). Logs also include message counts, queued bytes, and
 handshake times. `./scripts/build.sh <role> size` reports static flash and RAM
 use.
 
-QUIC PINGs go out every 15 seconds, with a 90-second idle timeout. The
-simulator rediscovers devices about every 5 seconds; a stale connection holds
-its slot until the idle timeout.
+QUIC PINGs go out every 5 seconds with a 30-second idle timeout (15 and 90
+seconds on drafts 1/2). The simulator rediscovers devices about every 5
+seconds; a stale connection holds its slot until the idle timeout.
 
 ### Hardware checklist
 
@@ -98,7 +97,8 @@ its slot until the idle timeout.
 ## Measurements
 
 One ESP32-D0WD-V3 (rev 3.1), 240 MHz, 4 MB flash, no PSRAM, reflashed for each
-role and connected over Wi-Fi to two Python peers. Short runs, not soak tests.
+role and connected over Wi-Fi to two Python peers. Measured on draft 2;
+draft 3 has not been measured on hardware yet.
 
 | Role | Run | Free heap, two peers | Minimum heap | Minimum stack headroom |
 |---|---|---:|---:|---:|
@@ -153,9 +153,9 @@ slots are free.
 
 - `probe --name` picks one of several boards. `probe --max-frame` sends a
   65,535-byte state message; the board should then log the following
-  `"mode":"putting"` state.
+  `"requested_capture_mode":"putting"` state.
 - `listen --quiet-after N` stops application messages N seconds after
-  connecting. `application_idle_seconds` should exceed 90 with both
+  connecting. `application_idle_seconds` should exceed 30 with both
   connections still up.
 - Opening a CP2102 serial monitor resets the board. To test reconnection,
   restart the harness and leave the monitor open.
@@ -202,9 +202,14 @@ python3 -m venv .venv
 
 - CTest: the C library tests and the firmware JSON extraction test.
 - `tests/integration/test_c_mock_schema.py`: validates mock message output
-  against the schemas.
+  against all three draft schema sets.
 - `tests/integration/test_c_python_interop.py`: runs the host build against
-  Python peers over QUIC, including concurrent connections and stream errors.
+  explicitly selected draft 2 Python peers using `cgp_host_draft2`, including
+  concurrent connections and stream errors. The default `cgp_host` uses draft 3
+  (connector arguments are `PORT KEY` pairs) and tests all three firmware roles
+  together. `mock_samples` also defaults to draft 3; pass `1` or `2` explicitly
+  for archived-schema samples. The C library tests cover draft 3 raw-key
+  authentication, menu, streams, and datagrams.
 - `tests/test_analyze_cpu.py`: tests the CPU log analyzer.
 
 Pass `--native-build-dir DIR` to pytest to use another build. For ASan/UBSan:

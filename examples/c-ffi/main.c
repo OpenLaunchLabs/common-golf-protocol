@@ -14,7 +14,7 @@ static int check(int32_t result) {
 }
 int main(int argc, char **argv) {
     CgpEndpoint *endpoint = NULL;
-    const char *config = "{\"identity_directory\":\"cgp-ffi-identity\",\"role\":\"simulator\",\"draft\":2,\"info\":{\"type\":\"info\",\"protocol_version\":\"0.2.0\",\"name\":\"C ABI example\"}}";
+    const char *config = "{\"identity_directory\":\"cgp-ffi-identity\",\"role\":\"simulator\",\"info\":{\"type\":\"info\",\"protocol_version\":\"0.3.0\",\"name\":\"C ABI example\"}}";
     if (cgp_abi_version() != 1 || !check(cgp_create(config, &endpoint))) return 1;
     if (argc == 3) {
         char fingerprint[65];
@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
             if (!check(cgp_poll(endpoint, 500, event, NULL))) goto fail;
         if (!received) goto fail;
         {
-            const char *state = "{\"type\":\"state\"}";
+            const char *state = "{\"type\":\"simulator_state\"}";
             if (!check(cgp_send(endpoint, 6, (const uint8_t *)state, (uint32_t)strlen(state), 1000))) goto fail;
         }
         received = 0;

@@ -1,11 +1,14 @@
 //! Rust implementation of the Common Golf Protocol.
 //! Wire draft selection is exclusively ALPN; `info.protocol_version` is descriptive.
+pub mod custom;
 pub mod discovery;
+pub mod draft3;
 pub mod endpoint;
 pub mod ffi;
 pub mod framing;
 pub mod identity;
 pub mod message;
+pub mod streams;
 pub mod transport;
 pub mod trust;
 pub use message::Draft;

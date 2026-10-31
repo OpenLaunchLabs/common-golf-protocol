@@ -42,11 +42,16 @@ int main(int argc, char **argv) {
     inet_pton(AF_INET, "127.0.0.1", &local);
     cgp_engine *engine = cgp_create(role, argv[1], local);
     if (!engine) return 1;
+    printf("KEY %s\n", cgp_identity(engine));
     printf("PORT %u\n", cgp_port(engine));
     for (int i = 2; i < argc; ++i) {
         struct sockaddr_in remote = {.sin_family = AF_INET, .sin_addr = local,
                                     .sin_port = htons((uint16_t)strtoul(argv[i], NULL, 10))};
+#if CONFIG_CGP_DRAFT == 3
+        if (++i >= argc || !cgp_connect_key(engine, &remote, "test-listener", argv[i])) return 1;
+#else
         if (!cgp_connect(engine, &remote, "test-listener")) return 1;
+#endif
     }
     uint64_t next_stats = 0;
     while (!done) {

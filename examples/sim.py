@@ -5,15 +5,22 @@ from functools import partial
 import json
 from pathlib import Path
 
-from common_golf import Connection, Draft, Identity, dial, discover
+from common_golf import Connection, Draft, Identity, dial, discover, OPEN_CONNECT, validate_shot_uuid
 
 
 class Sim(Connection):
     failures = 0
 
+    def __init__(self, *args, **kwargs):
+        if Draft(kwargs.get("draft", Draft.THREE)) == Draft.THREE:
+            kwargs["contracts"] = {OPEN_CONNECT.identifier: OPEN_CONNECT}
+            kwargs["info"] = {**kwargs.get("info", {}), "reads_contracts": [OPEN_CONNECT.identifier]}
+        super().__init__(*args, **kwargs)
+
     def on_connected(self):
         print(f"connected fingerprint={self.peer_fingerprint} tier={self.peer_tier}", flush=True)
-        self.publish(6, {"type": "state", "ready": True, "mode": "range",
+        self.publish(6, {"type": "simulator_state" if self.draft == Draft.THREE else "state", "ready": True,
+                         **({"requested_capture_mode": "full"} if self.draft == Draft.THREE else {"mode": "range"}),
                          "player": {"name": "Player 1", "dexterity": "right"}})
 
     def on_message(self, channel, message, stream_id):
@@ -21,13 +28,15 @@ class Sim(Connection):
         if channel == 1 and message.get("final", True):
             # Missing or unusable measurements cannot produce a carry estimate.
             ball_speed = message.get("ball_speed_meters_per_second")
-            shot_number = message.get("shot_number")
+            shot_number = message.get("shot_uuid" if self.draft == Draft.THREE else "shot_number")
             if (isinstance(ball_speed, bool) or not isinstance(ball_speed, (int, float))
-                    or isinstance(shot_number, bool) or not isinstance(shot_number, int)):
+                    or (self.draft != Draft.THREE and (isinstance(shot_number, bool) or not isinstance(shot_number, int)))):
                 return
-            self.publish(7, {"type": "result", "shot_number": shot_number, "accepted": True,
+            if self.draft == Draft.THREE:
+                validate_shot_uuid(shot_number)
+            self.publish(7, {"type": "result", ("shot_uuid" if self.draft == Draft.THREE else "shot_number"): shot_number, "accepted": True,
                              "carry_distance_meters": round(200.0 * (ball_speed / 65.0) ** 2, 2)})
-        elif channel == 2 and "DeviceID" in message:
+        elif channel in (2, 1003) and "DeviceID" in message:
             self.send(stream_id, {"Code": 200, "Message": "Shot received"})
 
     def on_stream_error(self, stream_id, code):
@@ -38,7 +47,7 @@ class Sim(Connection):
 
 def main():
     arguments = argparse.ArgumentParser(description=__doc__)
-    arguments.add_argument("--draft", type=int, choices=(1, 2), default=2)
+    arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
     arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")
@@ -53,7 +62,7 @@ def main():
             try:
                 async with dial(peer, identity, factory, draft=Draft(args.draft)) as connection:
                     await connection.wait_closed()
-            except ConnectionError:
+            except (ConnectionError, ValueError):
                 print(f"{peer.name}: TLS/ALPN connection failed", flush=True)
             finally:
                 seen.discard(peer.name)  # rediscover a device that reboots or drops

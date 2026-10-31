@@ -148,7 +148,7 @@ static int accept_maker_certificate(int preverify_ok, WOLFSSL_X509_STORE_CTX *ct
     return 1;
 }
 
-WOLFSSL_CTX *cgp_tls_context(bool server, const char *directory, char fingerprint[65])
+WOLFSSL_CTX *cgp_tls_context(bool server, bool raw_public_keys, const char *directory, char fingerprint[65])
 {
     unsigned char key_der[KEY_CAPACITY];
     unsigned char cert_der[CERT_CAPACITY];
@@ -156,6 +156,16 @@ WOLFSSL_CTX *cgp_tls_context(bool server, const char *directory, char fingerprin
     WOLFSSL_CTX *ctx = NULL;
     if (wolfSSL_Init() != WOLFSSL_SUCCESS) return NULL;
     if (load_identity(key_der, &key_size, cert_der, &cert_size, directory) != 0) goto fail;
+    if (raw_public_keys) {
+        ed25519_key key;
+        word32 index = 0;
+        if (wc_ed25519_init(&key)) goto fail;
+        int rc = wc_Ed25519PrivateKeyDecode(key_der, &index, &key, (word32)key_size);
+        int length = rc ? rc : wc_Ed25519PublicKeyToDer(&key, cert_der, sizeof(cert_der), 1);
+        wc_ed25519_free(&key);
+        if (length <= 0) goto fail;
+        cert_size = (size_t)length;
+    }
     ctx = wolfSSL_CTX_new(server ? wolfTLSv1_3_server_method() : wolfTLSv1_3_client_method());
     if (!ctx) goto fail;
     if ((server ? ngtcp2_crypto_wolfssl_configure_server_context(ctx)
@@ -169,8 +179,13 @@ WOLFSSL_CTX *cgp_tls_context(bool server, const char *directory, char fingerprin
                                           WOLFSSL_FILETYPE_ASN1) != WOLFSSL_SUCCESS ||
         wolfSSL_CTX_check_private_key(ctx) != WOLFSSL_SUCCESS)
         goto fail;
-    /* Request optional client identity; lack of a cert remains maker tier. */
-    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER, accept_maker_certificate);
+    if (raw_public_keys) {
+        char type = WOLFSSL_CERT_TYPE_RPK;
+        if (wolfSSL_CTX_set_client_cert_type(ctx, &type, 1) != WOLFSSL_SUCCESS ||
+            wolfSSL_CTX_set_server_cert_type(ctx, &type, 1) != WOLFSSL_SUCCESS) goto fail;
+    }
+    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER |
+        (raw_public_keys && server ? WOLFSSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0), accept_maker_certificate);
     wolfSSL_CTX_set_session_cache_mode(ctx, WOLFSSL_SESS_CACHE_OFF);
     /* ALPN is configured with wolfSSL_UseALPN on each connection. */
     ed25519_key key;

@@ -111,7 +111,7 @@ cJSON *cgp_json_extract(const char *json, size_t length)
 {
     static const char *const names[] = {
         "type", "final", "shot_number", "ball_speed_meters_per_second",
-        "horizontal_launch_angle_degrees"
+        "horizontal_launch_angle_degrees", "shot_uuid"
     };
     cJSON *object = cJSON_CreateObject();
     const char *end = json + length;
@@ -145,8 +145,8 @@ cJSON *cgp_json_extract(const char *json, size_t length)
                 if (strcmp(key, names[i]) || (seen & (1U << i)))
                     continue;
                 seen |= 1U << i;
-                if (i == 0) {
-                    char type[32];
+                if (i == 0 || i == 5) {
+                    char type[64];
                     if (ascii_string(start, finish, type, sizeof(type))) {
                         item = cJSON_CreateString(type);
                         if (!item)
