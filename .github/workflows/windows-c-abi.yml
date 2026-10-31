@@ -1,0 +1,62 @@
+name: Windows C ABI
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - 'implementations/rust/**'
+      - 'examples/rust/**'
+      - 'examples/c-ffi/**'
+      - 'examples/csharp/**'
+      - '.github/workflows/windows-c-abi.yml'
+      - '!**/*.md'
+  pull_request:
+    paths: *paths
+jobs:
+  windows-c-abi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install NASM for aws-lc
+        run: |
+          choco install nasm --no-progress -y
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build Rust DLL and Rust example
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path implementations/rust/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --target x86_64-pc-windows-msvc --manifest-path examples/rust/Cargo.toml
+      - name: Compile and run MSVC C consumer
+        run: |
+          $lib = "$env:GITHUB_WORKSPACE/implementations/rust/target/x86_64-pc-windows-msvc/release"
+          cmake -S examples/c-ffi -B examples/c-ffi/build -A x64 "-DCGP_RUST_LIBRARY=$lib/common_golf_protocol.dll.lib"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build examples/c-ffi/build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$lib/common_golf_protocol.dll" examples/c-ffi/build/Release/
+          ctest --test-dir examples/c-ffi/build -C Release --output-on-failure
+      - name: Test native C to Rust QUIC and fingerprint pinning
+        run: |
+          $env:CGP_C_EXAMPLE = "$env:GITHUB_WORKSPACE/examples/c-ffi/build/Release/cgp-c-ffi.exe"
+          cargo test --locked --target x86_64-pc-windows-msvc --manifest-path implementations/rust/Cargo.toml --test ffi -- --ignored
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test C# P/Invoke loading and discovery lifecycle
+        run: |
+          $env:PATH = "$env:GITHUB_WORKSPACE/examples/c-ffi/build/Release;$env:PATH"
+          dotnet run --project examples/csharp/Smoke.csproj --configuration Release
+      - name: Package native SDK
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Copy-Item implementations/rust/target/x86_64-pc-windows-msvc/release/common_golf_protocol.dll dist/
+          Copy-Item implementations/rust/target/x86_64-pc-windows-msvc/release/common_golf_protocol.dll.lib dist/
+          Copy-Item implementations/rust/include/cgp_rust.h dist/
+          Copy-Item examples/c-ffi/README.md dist/
+          Copy-Item examples/c-ffi/build/Release/cgp-c-ffi.exe dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cgp-windows-x64-sdk
+          path: dist/
