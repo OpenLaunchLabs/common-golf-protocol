@@ -11,8 +11,8 @@ python3 -m venv .venv
 .venv/bin/python examples/launch_monitor_minimum.py # terminal 2
 ```
 
-The simulator finds devices with DNS-SD. Everything defaults to draft 2; pass
-`--draft 1` to both ends for draft 1.
+The simulator finds devices with DNS-SD. Everything uses draft 2 by default;
+pass `--draft 1` to both ends for draft 1.
 
 | Script | Behavior |
 |---|---|
@@ -23,5 +23,5 @@ The simulator finds devices with DNS-SD. Everything defaults to draft 2; pass
 | `control_box.py` | Synthetic button presses. |
 | `sim.py` | Publishes state, returns shot results, and answers Open Connect. |
 
-Measurements are synthetic. Run a script with `--help` for its identity,
-trust-list, and duration options.
+Measurements are synthetic. Run a script with `--help` for its options,
+including identity, trust list, and duration.
