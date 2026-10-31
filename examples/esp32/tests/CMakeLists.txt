@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.16)
+project(cgp_native C)
+enable_testing()
+set(CMAKE_C_STANDARD 11)
+set(DEMO "${CMAKE_CURRENT_LIST_DIR}/..")
+set(REFERENCE "${DEMO}/../../implementations/c")
+# The native firmware-role harness requires no ESP-IDF SDK. Fetch dependencies
+# with implementations/c/tools/fetch_deps.py before configuring this directory.
+add_subdirectory("${REFERENCE}" "reference")
+# The reference library defines CGP_SANITIZE and instruments its own targets.
+# Apply the same flags to the firmware harness targets in this directory.
+if(CGP_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+add_executable(cgp_host host_main.c "${DEMO}/main/mock.c")
+target_include_directories(cgp_host PRIVATE "${DEMO}/main" "${REFERENCE}/src")
+target_compile_options(cgp_host PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(cgp_host PRIVATE common_golf)
+add_executable(mock_samples mock_samples.c "${DEMO}/main/mock.c")
+target_include_directories(mock_samples PRIVATE "${DEMO}/main" "${REFERENCE}/src")
+target_compile_definitions(mock_samples PRIVATE CGP_MOCK_SAMPLES=1)
+target_compile_options(mock_samples PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(mock_samples PRIVATE common_golf)
+add_executable(test_json_extract test_json_extract.c)
+target_compile_options(test_json_extract PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_link_libraries(test_json_extract PRIVATE common_golf)
+add_test(NAME firmware_json_extract COMMAND test_json_extract)

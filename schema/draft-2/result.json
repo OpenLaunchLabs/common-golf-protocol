@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 7: result (simulator's computed outcome, not an acknowledgement)",
+  "type": "object",
+  "required": ["type", "shot_number"],
+  "properties": {
+    "type": {"const": "result"},
+    "shot_number": {"type": "integer", "minimum": 1},
+    "accepted": {"type": "boolean"},
+    "reject_reason": {"type": "string"},
+    "carry_distance_meters": {"type": "number", "minimum": 0},
+    "total_distance_meters": {"type": "number", "minimum": 0},
+    "carry_side_meters": {"type": "number"},
+    "total_side_meters": {"type": "number"},
+    "max_height_meters": {"type": "number", "minimum": 0}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 8: flight (device's computed ball flight)",
+  "type": "object",
+  "required": ["type", "shot_number"],
+  "properties": {
+    "type": {"const": "flight"},
+    "shot_number": {"type": "integer", "minimum": 1},
+    "carry_distance_meters": {"type": "number", "minimum": 0},
+    "carry_side_meters": {"type": "number"},
+    "total_distance_meters": {"type": "number", "minimum": 0},
+    "total_side_meters": {"type": "number"},
+    "max_height_meters": {"type": "number", "minimum": 0},
+    "curve_meters": {"type": "number"},
+    "landing_angle_degrees": {"type": "number", "minimum": 0, "maximum": 90},
+    "hang_time_seconds": {"type": "number", "minimum": 0},
+    "final": {"type": "boolean"}
+  }
+}

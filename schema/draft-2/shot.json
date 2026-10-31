@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 1: shot (measured at launch)",
+  "type": "object",
+  "required": ["type", "shot_number", "ball_speed_meters_per_second", "vertical_launch_angle_degrees", "horizontal_launch_angle_degrees"],
+  "properties": {
+    "type": {"const": "shot"},
+    "shot_number": {"type": "integer", "minimum": 1},
+    "ball_speed_meters_per_second": {"type": "number", "minimum": 0},
+    "vertical_launch_angle_degrees": {"type": "number", "minimum": -90, "maximum": 90},
+    "horizontal_launch_angle_degrees": {"type": "number", "minimum": -90, "maximum": 90},
+    "total_spin_revolutions_per_minute": {"type": "number", "description": "Negative is topspin"},
+    "spin_axis_degrees": {"type": "number", "minimum": -90, "maximum": 90, "description": "Positive curves right, whatever the sign of total spin"},
+    "backspin_revolutions_per_minute": {"type": "number"},
+    "sidespin_revolutions_per_minute": {"type": "number"},
+    "measurement_id": {"type": "string"},
+    "measured_at_nanoseconds": {"type": "integer"},
+    "player_dexterity": {"enum": ["right", "left", "unknown"]},
+    "tee_position": {"enum": ["tee", "mat", "ground", "unknown"]},
+    "estimated": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Numeric fields the device could not measure for this shot, or believes to have reduced accuracy. A sender MUST name only fields present in the message. A receiver ignores any other name",
+      "items": {"type": "string"}
+    },
+    "final": {"type": "boolean"},
+    "shot_kind": {"enum": ["full", "putt", "chip"]}
+  },
+  "dependentRequired": {
+    "total_spin_revolutions_per_minute": ["spin_axis_degrees"],
+    "spin_axis_degrees": ["total_spin_revolutions_per_minute"],
+    "backspin_revolutions_per_minute": ["total_spin_revolutions_per_minute", "sidespin_revolutions_per_minute"],
+    "sidespin_revolutions_per_minute": ["total_spin_revolutions_per_minute", "backspin_revolutions_per_minute"]
+  }
+}

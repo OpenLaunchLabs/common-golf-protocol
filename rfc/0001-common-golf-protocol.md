@@ -170,8 +170,13 @@ images or video would state its own ceiling, and would likely be a byte
 stream rather than JSON frames. Every message in this document is under
 four kilobytes.
 
+JSON numbers MUST be within the IEEE 754 double range (I-JSON, RFC 7493,
+section 2.2). No golf value comes close; a number such as `1e999` means the
+sender is broken.
+
 A length above the channel's maximum, a payload that is not one valid JSON
-object, or a FIN arriving inside a frame is malformed. The receiver MUST
+object, a number outside the double range, or a FIN arriving inside a frame
+is malformed. The receiver MUST
 discard the rest of that stream, MUST send STOP_SENDING with application
 error code 2 if the stream is still open (a stream that already ended with
 FIN cannot be stopped, so it is simply discarded), and MUST keep the
@@ -194,7 +199,7 @@ stream for a channel the opener already has open, is declined the same way.
 | Code | Name | Sent as | Meaning |
 |---|---|---|---|
 | 1 | `not_interested` | STOP_SENDING | I do not read this channel, or you may not open it |
-| 2 | `malformed` | STOP_SENDING | Bad length, not one JSON object, or FIN inside a frame |
+| 2 | `malformed` | STOP_SENDING | Bad length, not one JSON object, a number outside the double range, or FIN inside a frame |
 
 No other codes are defined. Nothing closes the connection except the
 transport itself.

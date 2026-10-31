@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 4: status (device state, sent on change)",
+  "type": "object",
+  "required": [
+    "type"
+  ],
+  "properties": {
+    "type": {
+      "const": "status"
+    },
+    "ready": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "ball_detected": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "battery_percent": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "uptime_seconds": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "description": "Sent in full on open, then only changed fields. Absent is unchanged, null clears."
+}

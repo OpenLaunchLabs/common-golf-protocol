@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 5: control (virtual button)",
+  "type": "object",
+  "required": ["type", "command"],
+  "properties": {
+    "type": {"const": "control"},
+    "command": {"type": "string", "description": "Standard names: left right up down reset_aim club_up club_down putter_toggle mulligan rehit drop tee_left tee_right switch_hand flyover shot_cam scorecard heatmap map green_grid pin hide_ui select back. Receivers ignore names they do not know."},
+    "event": {"enum": ["press", "down", "up"], "default": "press"}
+  }
+}
