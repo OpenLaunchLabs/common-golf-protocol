@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "common-golf-protocol"
+version = "0.2.0"
+description = "Common Golf Protocol reference implementation for drafts 1 and 2"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = ["aioquic==1.2.0", "zeroconf==0.147.0"]
+
+[project.optional-dependencies]
+test = ["jsonschema==4.25.1", "pytest>=8,<9", "build>=1,<2"]
+
+[project.scripts]
+cgp-python-peer = "common_golf.peer:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

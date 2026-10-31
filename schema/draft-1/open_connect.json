@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 2: GSPro Open Connect v1 bodies, verbatim, both directions",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["DeviceID", "ShotNumber", "APIversion", "ShotDataOptions"],
+      "properties": {
+        "DeviceID": {"type": "string"},
+        "Units": {"type": "string"},
+        "ShotNumber": {"type": "integer", "minimum": 0},
+        "APIversion": {"const": "1"},
+        "BallData": {
+          "type": "object",
+          "required": ["Speed", "SpinAxis", "HLA", "VLA"],
+          "properties": {
+            "Speed": {"type": "number"}, "SpinAxis": {"type": "number"}, "TotalSpin": {"type": "number"},
+            "BackSpin": {"type": "number"}, "SideSpin": {"type": "number"},
+            "HLA": {"type": "number"}, "VLA": {"type": "number"}, "CarryDistance": {"type": "number"}
+          }
+        },
+        "ClubData": {
+          "type": "object",
+          "properties": {
+            "Speed": {"type": "number"}, "AngleOfAttack": {"type": "number"}, "FaceToTarget": {"type": "number"},
+            "Lie": {"type": "number"}, "Loft": {"type": "number"}, "Path": {"type": "number"},
+            "SpeedAtImpact": {"type": "number"}, "VerticalFaceImpact": {"type": "number"},
+            "HorizontalFaceImpact": {"type": "number"}, "ClosureRate": {"type": "number"}
+          }
+        },
+        "ShotDataOptions": {
+          "type": "object",
+          "required": ["ContainsBallData"],
+          "properties": {
+            "ContainsBallData": {"type": "boolean"}, "ContainsClubData": {"type": "boolean"},
+            "LaunchMonitorIsReady": {"type": "boolean"}, "LaunchMonitorBallDetected": {"type": "boolean"},
+            "IsHeartBeat": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["Code", "Message"],
+      "properties": {
+        "Code": {"type": "integer"},
+        "Message": {"type": "string"},
+        "Player": {
+          "type": "object",
+          "properties": {"Handed": {"type": "string"}, "Club": {"type": "string"}, "DistanceToTarget": {"type": "number"}}
+        }
+      }
+    }
+  ]
+}

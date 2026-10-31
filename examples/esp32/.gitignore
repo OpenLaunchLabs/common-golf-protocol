@@ -1,0 +1,13 @@
+build*/
+sdkconfig
+sdkconfig.old
+sdkconfig.*.old
+sdkconfig.launch_monitor
+sdkconfig.control_box
+sdkconfig.simulator
+managed_components/
+third_party/
+dependencies.lock
+.venv/
+__pycache__/
+tests/.build*/

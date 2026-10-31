@@ -1,0 +1,81 @@
+menu "Common Golf Protocol demo"
+    config CGP_DRAFT
+        int "Protocol draft"
+        range 1 2
+        default 2
+        help
+            Draft 1 (0.1.x) or draft 2 (0.2.0).
+            Every peer on a connection must use the same draft ALPN.
+
+
+    config CGP_WIFI_SSID
+        string "Wi-Fi network name (SSID)"
+        default ""
+        help
+            All boards must join the same 2.4 GHz network with multicast
+            between clients. Credentials are stored in the local sdkconfig.
+
+    config CGP_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+        help
+            Leave empty for an open network. Do not commit sdkconfig or
+            distribute a firmware image containing private credentials.
+
+    choice CGP_ROLE
+        prompt "Board role"
+        default CGP_ROLE_LAUNCH_MONITOR
+
+        config CGP_ROLE_LAUNCH_MONITOR
+            bool "Fake launch monitor"
+
+        config CGP_ROLE_CONTROL_BOX
+            bool "Random control box"
+
+        config CGP_ROLE_SIMULATOR
+            bool "Fake simulator (discover, connect, log)"
+    endchoice
+
+    config CGP_DEMO_PEERS_ONLY
+        bool "Only connect to demo/example devices"
+        depends on CGP_ROLE_SIMULATOR
+        default y
+        help
+            Filter simulator discovery by the mDNS vendor TXT value. Accept
+            Common Golf example (ESP32 demos), CGP hardware test (fixtures),
+            and Example (repository Python examples). Disable this to connect
+            to other discovered Common Golf devices. This is a selection
+            filter, not a trust or authentication policy.
+
+    config CGP_LOG_PAYLOADS
+        bool "Print received JSON payloads to serial"
+        default y
+        help
+            Disable to measure protocol CPU cost separately from verbose serial
+            logging. Connection events and resource statistics remain enabled.
+
+    config CGP_CPU_PROFILING
+        bool "Report per-core CPU usage every two seconds"
+        default n
+        depends on FREERTOS_GENERATE_RUN_TIME_STATS
+        depends on FREERTOS_RUN_TIME_COUNTER_TYPE_U64
+        depends on FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER
+        help
+            First enable FreeRTOS run time statistics, choose uint64_t for
+            configRUN_TIME_COUNTER_TYPE, and choose ESP Timer as the run time
+            statistics clock under Component config > FreeRTOS.
+            Adds a profiling task using that scheduler runtime accounting.
+            Per-task percentages use one core as 100%; the chip percentage uses
+            both cores as 100%. Interrupt time is charged to the interrupted
+            task. Uses IPC snapshots to flush otherwise continuously idle cores.
+
+    config CGP_MAX_CONNECTIONS
+        int "Maximum simultaneous peer connections"
+        range 2 4
+        default 2
+        help
+            Two allows the simulator to attach to a launch monitor and a
+            control box at once, or a listener to serve two simulators.
+            Higher values need more heap; measure the telemetry on your board.
+
+endmenu

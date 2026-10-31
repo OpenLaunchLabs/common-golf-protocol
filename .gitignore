@@ -1,0 +1,21 @@
+# Local Wi-Fi credentials for hardware testing.
+/wifi
+
+# Local reference builds, package artifacts, and test identities.
+/.venv/
+__pycache__/
+*.egg-info/
+/implementations/python/build/
+/implementations/python/dist/
+/implementations/rust/target/
+/examples/rust/target/
+/implementations/c/build*/
+/implementations/c/third_party/
+/test-results/
+**/.cgp-identities/
+
+/examples/c-ffi/build/
+/examples/csharp/bin/
+/examples/csharp/obj/
+**/cgp-ffi-identity/
+/dist/
