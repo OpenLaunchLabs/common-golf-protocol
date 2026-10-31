@@ -1,42 +1,38 @@
 # Reference libraries
 
-Reusable protocol libraries, separate from the applications in `examples/`.
-Each has a library API and a diagnostic peer executable (`cgp-peer`) used by
-the compatibility tests.
+Protocol libraries, separate from the applications in `examples/`.
 
 - [Python](python/README.md): `common-golf-protocol` package on aioquic.
 - [Rust](rust/README.md): `common-golf-protocol` crate on noq/rustls.
 - [C](c/README.md): static library on ngtcp2/wolfSSL, shared with the
   [ESP32 demo](../examples/esp32/README.md).
 
-| ALPN | Protocol versions | Accuracy fields |
+Each library also builds a diagnostic peer for the compatibility tests:
+`cgp-python-peer`, and `cgp-peer` for Rust and C.
+
+| ALPN | Protocol versions | Accuracy field |
 |---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | `shot.reduced_accuracy` |
 | `common-golf/draft-2` | 0.2.0 | `shot.estimated`, `club.estimated` |
 
-The [RFC](../rfc/0001-common-golf-protocol.md) defines draft 2; new
-applications should use it. Draft 1 exists so the tests can cover older peers
-and ALPN mismatch. The ALPN selects behavior; `info.protocol_version` is
+The [RFC](../rfc/0001-common-golf-protocol.md) defines draft 2, and new
+applications should use it. Draft 1 support lets the tests cover older peers
+and ALPN mismatches. Behavior follows the ALPN; `info.protocol_version` is
 informational.
 
 All three libraries provide persistent Ed25519 identities with raw-public-key
-fingerprints, 15-second QUIC keep-alives, a 90-second idle timeout, standard
-channel ownership, per-stream rejection, and explicitly configured private JSON
-channels. Applications supply measurements, shot counters, trust lists, and
-channel policy.
-
-JSON Schemas are test tools, not runtime dependencies. Applications parse the
-fields they use; the libraries handle framing, limits, and stream admission.
-
-For C# or Windows, implement CGP on any suitable QUIC library. The
-[experimental Rust FFI DLL](../examples/c-ffi/README.md) is a fallback.
+fingerprints, 15 s QUIC keep-alives, a 90 s idle timeout, channel ownership
+checks, per-stream rejection, and explicitly configured private JSON channels.
+Applications supply measurements, shot counters, trust lists, and channel
+policy. JSON Schemas are used by the tests only; the libraries do not validate
+message content.
 
 ## Build and test
 
-Requirements: Python 3.9+, Rust 1.90+, CMake 3.16+, and a C11 compiler. C
-dependencies are fetched at pinned, SHA-256-verified revisions. Native
-discovery uses Bonjour on macOS or `libavahi-compat-libdnssd-dev` with a
-running Avahi daemon on Linux.
+Requirements: Python 3.9+ (CI uses 3.12), Rust 1.90+, CMake 3.16+, and a C11
+compiler. C dependencies are fetched at pinned, SHA-256-verified revisions.
+Native discovery needs Bonjour on macOS, or `libavahi-compat-libdnssd-dev` and
+a running Avahi daemon on Linux.
 
 From the repository root:
 
@@ -70,7 +66,8 @@ ctest --test-dir implementations/c/build --output-on-failure
 cargo package --locked --allow-dirty --manifest-path implementations/rust/Cargo.toml
 ```
 
-Discovery tests need local multicast and are not run in CI:
+The Rust test suite includes a live mDNS advertise/browse test. The
+cross-language discovery tests need local multicast and are not run in CI:
 
 ```sh
 .venv/bin/python tests/compatibility/discovery.py
@@ -78,11 +75,14 @@ Discovery tests need local multicast and are not run in CI:
 ```
 
 Reports go to `test-results/`. See the
-[compatibility guide](../tests/compatibility/README.md) for coverage.
+[compatibility tests](../tests/compatibility/README.md).
 
-## Dependency updates
+CI (`.github/workflows/reference-implementations.yml`) also runs the ESP32 host
+tests and a Windows job that builds the Rust DLL and runs the
+[C FFI example](../examples/c-ffi/README.md) and a C# smoke test.
 
-Python pins aioquic and confines private API use to `compat.py`. The C library
-builds the same transport for host and ESP32. After changing a transport
-dependency, re-run the build, test, and packaging steps above; after changing
-shared C or TLS configuration, also rebuild the ESP32 firmware.
+## Updating dependencies
+
+After changing a transport dependency, re-run the build, test, and packaging
+steps. After changing shared C or TLS configuration, also rebuild the ESP32
+firmware.

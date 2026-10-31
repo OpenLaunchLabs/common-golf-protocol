@@ -10,24 +10,16 @@ Status: draft 2. Everything here is provisional.
 
 ## Reference implementations
 
-Three reusable libraries live separately from the reference applications:
-
 | Implementation | Install/build | Transport |
 |---|---|---|
 | [Python package](implementations/python/README.md) | `pip install ./implementations/python` | aioquic |
 | [Rust crate](implementations/rust/README.md) | `cargo build --manifest-path implementations/rust/Cargo.toml` | noq / rustls |
-| [Standalone C library](implementations/c/README.md) | CMake; also shared with the ESP32 demo | ngtcp2 / wolfSSL |
+| [C library](implementations/c/README.md) | CMake; also used by the ESP32 demo | ngtcp2 / wolfSSL |
 
-They support draft 1 (0.1.0 and 0.1.1) and draft 2 (0.2.0), including
-explicitly configured private JSON channels. The Python package and Rust crate
-are local packages, not published releases. Draft 1 support lets the tests check
-older peers and ALPN boundaries; new applications should use draft 2.
-
-Follow the [implementation guide](implementations/README.md#build-and-test)
-to build the libraries and run their unit tests plus a
-[63-case cross-language QUIC matrix](tests/compatibility/README.md),
-malformed-stream probes, and the reference application tests. The guide also
-covers optional multicast DNS-SD tests and package verification.
+All three support draft 1 and draft 2; new applications should use draft 2.
+The Python package and Rust crate are not yet published. The
+[implementation guide](implementations/README.md#build-and-test) covers
+building and the [cross-language tests](tests/compatibility/README.md).
 
 ## Run the examples first
 
@@ -43,8 +35,7 @@ python3 -m venv .venv
 .venv/bin/python examples/launch_monitor_minimum.py # terminal 2: the smallest launch monitor
 ```
 
-The simulator consumes messages using ordinary JSON field access. Schema
-conformance is checked by the repository tests and CI. Swap the device for any of these, or run
+Swap the device for any of these, or run
 them all at once. Run two simulators too: every connection is independent
 and a device serves all of them.
 
@@ -64,19 +55,15 @@ To see trust tiers, print the simulator's fingerprint and list it:
 .venv/bin/python examples/launch_monitor_full.py --trusted my-fingerprints.json
 ```
 
-The examples consume the Python package in `implementations/python`; framing,
-TLS, identities, and discovery have one implementation. Shot and swing
-measurements vary within bounded random ranges around typical values. The full
-launch monitor keeps preliminary/final shots consistent and scales synthetic
-club speed and carry with ball speed. Use `--draft 1` or `--draft 2` (default)
-and select the same draft in the simulator.
+The examples use the Python package in `implementations/python`, and their
+measurements are synthetic. They default to draft 2; pass `--draft 1` to both
+ends for draft 1. Rust and C versions are in `examples/rust` and `examples/c`.
 
 ## Try ESP32 hardware
 
 The [ESP-WROOM-32 demo](examples/esp32/README.md) builds three firmware roles:
-a synthetic launch monitor, a random control box, and a simulator that discovers
-and logs both over QUIC. It includes flashing instructions and resource telemetry
-for measuring the protocol on boards without PSRAM.
+a synthetic launch monitor, a random control box, and a simulator that
+discovers both.
 
 ## Then read the spec
 
@@ -87,8 +74,8 @@ the whole protocol. `schema/` holds one JSON Schema per channel.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the two rules that keep this small,
 and the policy that everything here is written by people.
-[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) lists private
-channels others have built.
+[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) explains how to
+document private channels, with clearly marked placeholder examples.
 
 ## License
 
