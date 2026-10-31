@@ -11,8 +11,9 @@ schemas. Frozen copies remain unchanged:
 
 Choose the schema set by the negotiated ALPN, not `protocol_version`.
 
-`tests/compatibility/schema_check.py` validates against the frozen copies, so
-editing the working schemas doesn't change the checks for a published draft.
+`tests/compatibility/schema_check.py` uses the working schemas for draft 3 and
+the frozen copies for drafts 1/2, so editing the working schemas doesn't
+change the checks for a published draft.
 It also checks rules JSON Schema can't express, such as `estimated` naming
 present numeric fields, and a zero total spin having a zero spin axis.
 
