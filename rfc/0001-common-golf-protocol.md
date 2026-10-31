@@ -110,7 +110,7 @@ DNS-SD over mDNS (RFC 6762, RFC 6763):
 | Service type | `_common-golf._udp.local.` |
 | Instance name | Human-readable device name |
 | SRV | The host and the port the listener actually bound |
-| TXT | `key` (required); `vendor`, `model`, `serial` (optional); all strings |
+| TXT | `key` (required); `vendor`, `model`, `serial`, `alpn`, `caps` (optional); all strings |
 
 `key` is the listener's Ed25519 public key written as a fingerprint
 (section 4): 64 lowercase hex characters, the same key the listener
@@ -120,6 +120,15 @@ lowercase hex characters. A listener whose key changes MUST re-announce
 its TXT record (RFC 6762, section 8.4) so that caches drop the old value.
 Like `serial`, an advertised key lets anyone on the network recognise the
 listener when it reappears. What a connector may do with it is in section 4.
+
+The optional `alpn` key lists accepted ALPN strings with the `common-golf/`
+prefix removed and comma-separated, for example `draft-2,draft-3`. The
+optional `caps` key lists data capabilities, for example `ball,club,control`.
+These are discovery hints, not negotiation or channel permissions. Their
+values, update behavior, and handling of unknown entries are defined in the
+[draft-3 profile](../implementations/DRAFT3.md#discovery-txt-keys). The hints
+are additive and can also be advertised by earlier drafts without adopting
+this draft's transport or channel requirements.
 
 A connector MUST find listeners by browsing for that service type.
 Discovery is REQUIRED on both ends; it is not a convenience layered over
