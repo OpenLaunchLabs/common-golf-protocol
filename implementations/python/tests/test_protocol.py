@@ -46,6 +46,17 @@ def test_bad_json(payload):
         parser.feed(b"\0")
 
 
+def test_messages_before_malformed_frame_are_kept():
+    shot = {"type": "shot", "shot_number": 1}
+    parser = StreamDecoder(channel=1)
+    with pytest.raises(ProtocolError) as error:
+        parser.feed(frame(shot) + struct.pack(">I", 2) + b"{!")
+    assert error.value.messages == [shot]
+    with pytest.raises(ProtocolError) as error:
+        parser.feed(frame(shot))
+    assert error.value.messages == []
+
+
 @pytest.mark.parametrize("wire", [b"", b"\0", b"\0\0\0", b"\0\0\0\1\0", b"\0\0\0\1\0\0\0\3{}"])
 def test_truncated_fin(wire):
     with pytest.raises(ProtocolError):

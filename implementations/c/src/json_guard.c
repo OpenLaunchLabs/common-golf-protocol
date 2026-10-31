@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -126,8 +128,60 @@ static bool digit(unsigned char c)
     return c >= '0' && c <= '9';
 }
 
+/* Numbers must fit a double (RFC section 3.4); cJSON would otherwise turn
+ * 1e999 into infinity. The token has already matched the JSON grammar. Work
+ * out its decimal magnitude without copying it: a legal token can be 64 KB.
+ * Only a number at the 1e308 boundary is handed to strtod, as its leading
+ * significant digits (no decimal point, so the locale does not matter). */
+static bool finite_number(const unsigned char *at, const unsigned char *end)
+{
+    char digits[48];
+    size_t kept = 0;
+    long magnitude = 0, exponent = 0;
+    bool seen = false, fraction = false, negative = false;
+    if (*at == '-')
+        ++at;
+    for (; at < end && *at != 'e' && *at != 'E'; ++at) {
+        if (*at == '.') {
+            fraction = true;
+            continue;
+        }
+        if (!seen && *at == '0') {
+            if (fraction)
+                --magnitude;
+            continue;
+        }
+        if (!seen) {
+            seen = true;
+            if (fraction)
+                --magnitude;
+        } else if (!fraction) {
+            ++magnitude;
+        }
+        if (kept < 40)
+            digits[kept++] = (char)*at;
+    }
+    if (!seen)
+        return true; /* zero */
+    if (at < end) {
+        ++at;
+        if (*at == '+' || *at == '-')
+            negative = *at++ == '-';
+        for (; at < end; ++at) {
+            if (exponent < 100000)
+                exponent = exponent * 10 + (*at - '0');
+        }
+    }
+    magnitude += negative ? -exponent : exponent;
+    if (magnitude != 308)
+        return magnitude < 308;
+    snprintf(digits + kept, sizeof(digits) - kept, "e%ld", 308 - (long)(kept - 1));
+    return isfinite(strtod(digits, NULL));
+}
+
 static bool number_value(parser *p)
 {
+    const unsigned char *start = p->at;
     if (*p->at == '-')
         ++p->at;
     if (p->at == p->end)
@@ -159,7 +213,7 @@ static bool number_value(parser *p)
             ++p->at;
         } while (p->at < p->end && digit(*p->at));
     }
-    return true;
+    return finite_number(start, p->at);
 }
 
 static bool literal(parser *p, const char *value, size_t length)

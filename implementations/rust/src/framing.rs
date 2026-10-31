@@ -7,9 +7,24 @@ pub const MAX_MESSAGE_BYTES: usize = 65_535;
 pub const NOT_INTERESTED: u32 = 1;
 pub const MALFORMED: u32 = 2;
 
+/// Numbers must fit a double (RFC section 3.4). With `arbitrary_precision`,
+/// serde_json keeps `1e999` as text instead of rejecting it, so check here.
+/// serde_json's recursion limit bounds the depth of this walk.
+fn finite(value: &Value) -> bool {
+    match value {
+        Value::Number(n) => n.as_f64().is_some_and(f64::is_finite),
+        Value::Array(items) => items.iter().all(finite),
+        Value::Object(fields) => fields.values().all(finite),
+        _ => true,
+    }
+}
+
 pub fn encode(value: &Value) -> Result<Vec<u8>> {
     if !value.is_object() {
         bail!("Common Golf messages must be JSON objects");
+    }
+    if !finite(value) {
+        bail!("Common Golf numbers must fit a double");
     }
     let body = serde_json::to_vec(value)?;
     if body.len() > MAX_MESSAGE_BYTES {
@@ -43,6 +58,9 @@ pub async fn read_message<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Option
     let value: Value = serde_json::from_slice(&payload)?;
     if !value.is_object() {
         bail!("Common Golf payload is not a JSON object");
+    }
+    if !finite(&value) {
+        bail!("Common Golf payload has a number outside the double range");
     }
     Ok(Some(value))
 }
@@ -86,12 +104,20 @@ mod tests {
             read_message(&mut bytes.as_slice()).await.unwrap(),
             Some(body)
         );
+        let edge = [
+            &[0, 0, 0, 36][..],
+            br#"{"n":1.7976931348623157e308,"z":0e9}"#,
+        ]
+        .concat();
+        assert!(read_message(&mut edge.as_slice()).await.unwrap().is_some());
         for bytes in [
             (MAX_MESSAGE_BYTES as u32 + 1).to_be_bytes().to_vec(),
             vec![0, 0, 0, 2, b'[', b']'],
             vec![0, 0, 0, 2, b'{'],
             vec![0, 0],
             vec![0, 0, 0, 2, 0xff, 0xff],
+            [&[0, 0, 0, 11][..], br#"{"n":1e999}"#].concat(),
+            [&[0, 0, 0, 16][..], br#"{"n":[-1.8e308]}"#].concat(),
         ] {
             assert!(read_message(&mut bytes.as_slice()).await.is_err());
         }

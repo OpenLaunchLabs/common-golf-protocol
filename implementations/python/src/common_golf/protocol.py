@@ -39,6 +39,7 @@ class ProtocolError(ValueError):
     def __init__(self, message, code=MALFORMED):
         super().__init__(message)
         self.code = code
+        self.messages = []
 
 
 def _finite(value):
@@ -85,6 +86,9 @@ class StreamDecoder:
     Pass channel=2 for a response half (no channel prefix). on_channel is
     called as soon as the prefix arrives and may raise ProtocolError(code=1).
     Errors latch, FIN closes the parser, and subsequent data is ignored.
+    A ProtocolError raised by feed() carries the messages decoded before the
+    bad frame in its ``messages`` attribute; they are valid and should be
+    delivered.
     """
     def __init__(self, channel=None, limit=MAX_MESSAGE_BYTES, on_channel=None):
         self.channel = channel
@@ -100,6 +104,7 @@ class StreamDecoder:
         if self.ended:
             return []
         if self.error:
+            self.error.messages = []  # already returned with the first raise
             raise self.error
         messages = []
         cursor = 0
@@ -136,6 +141,7 @@ class StreamDecoder:
         except ProtocolError as exc:
             self.error = exc
             self._payload.clear()
+            exc.messages = messages
             raise
 
 

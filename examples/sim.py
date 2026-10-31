@@ -55,6 +55,8 @@ def main():
                     await connection.wait_closed()
             except ConnectionError:
                 print(f"{peer.name}: TLS/ALPN connection failed", flush=True)
+            finally:
+                seen.discard(peer.name)  # rediscover a device that reboots or drops
         try:
             async def browse():
                 while True:

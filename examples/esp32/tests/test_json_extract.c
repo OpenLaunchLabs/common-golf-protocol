@@ -101,11 +101,18 @@ int main(void)
     assert(cJSON_GetArraySize(object) == 1);
     cJSON_Delete(object);
 
-    /* Huge numeric tokens remain accepted JSON, but are not useful counters. */
+    /* A number too large for a double is malformed (RFC section 3.4). */
     at = sizeof(number_prefix) - 1;
     memcpy(buffer, number_prefix, at);
     memset(buffer + at, '1', size - at - 1);
     buffer[size - 1] = '}';
+    assert(!cgp_json_valid(buffer, size));
+
+    /* Long numeric tokens that fit a double remain valid JSON, but are not
+     * useful counters. */
+    memcpy(buffer + at, "0.", 2);
+    memset(buffer + at + 2, '0', size - at - 4);
+    buffer[size - 2] = '1';
     object = extract(buffer, size);
     assert_type(object, "shot");
     assert(!cJSON_HasObjectItem(object, "shot_number"));

@@ -33,7 +33,7 @@ impl Draft {
             .find(|draft| draft.alpn() == alpn)
     }
 
-    fn excluded_metadata(self, channel: u32) -> Option<&'static str> {
+    pub(crate) fn excluded_metadata(self, channel: u32) -> Option<&'static str> {
         match (self, channel) {
             (Self::One, 1 | 3) => Some("estimated"),
             (Self::Two, 1) => Some("reduced_accuracy"),

@@ -25,10 +25,14 @@ static cgp_stream *find_stream(cgp_peer *p, int64_t id) {
     return NULL;
 }
 
-static cgp_stream *new_stream(cgp_peer *p, int64_t id) {
+static bool stream_table_full(const cgp_peer *p) {
     unsigned count = 0;
-    for (cgp_stream *s = p->streams; s; s = s->next) ++count;
-    if (count >= CGP_MAX_STREAMS) return NULL;
+    for (const cgp_stream *s = p->streams; s; s = s->next) ++count;
+    return count >= CGP_MAX_STREAMS;
+}
+
+static cgp_stream *new_stream(cgp_peer *p, int64_t id) {
+    if (stream_table_full(p)) return NULL;
     cgp_stream *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->id = id;
@@ -70,9 +74,11 @@ static void drop_peer(cgp_peer *p) {
 }
 
 static cgp_stream *channel_stream(cgp_peer *p, uint32_t channel, bool outgoing) {
-    for (cgp_stream *s = p->streams; s; s = s->next)
-        if (s->assigned && s->channel == channel && (s->outgoing == outgoing || channel == 2) && !s->stopped && !s->rx.ended)
-            return s;
+    for (cgp_stream *s = p->streams; s; s = s->next) {
+        if (!s->assigned || s->channel != channel || (s->outgoing != outgoing && channel != 2) || s->stopped) continue;
+        /* The channel 2 responder still owes replies after the opener's FIN. */
+        if (!s->rx.ended || (outgoing && channel == 2 && !s->outgoing)) return s;
+    }
     return NULL;
 }
 
@@ -94,6 +100,7 @@ bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
     if (opening && (channel == 2 && sim)) return false; /* device opens compatibility */
     size_t bytes = length + 4 + (opening ? 4 : 0);
     if (!can_queue(p,bytes)) { ++p->suppressed_messages; return false; }
+    if (opening && stream_table_full(p)) return false;
     cgp_buffer *b = malloc(sizeof(*b) + bytes);
     if (!b) { ++p->suppressed_messages; return false; }
     if (opening) {
@@ -102,7 +109,7 @@ bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
                               : ngtcp2_conn_open_uni_stream(p->quic, &sid, NULL);
         if (rc) { free(b); return false; }
         s = new_stream(p, sid);
-        if (!s) { free(b); return false; }
+        if (!s) { ngtcp2_conn_shutdown_stream(p->quic, 0, sid, CGP_NOT_INTERESTED); free(b); return false; }
         s->outgoing = true;
         s->channel = channel;s->assigned=true;
         if (channel < CGP_CHANNELS) p->tx[channel] = sid;
@@ -178,7 +185,11 @@ static int receive_stream(ngtcp2_conn *conn, uint32_t flags, int64_t id,
     cgp_peer *p = user;
     cgp_stream *s = find_stream(p, id);
     if (!s) s = new_stream(p, id);
-    if (!s) {ngtcp2_conn_shutdown_stream(conn,0,id,CGP_NOT_INTERESTED);return 0;}
+    if (!s) {
+        ngtcp2_conn_extend_max_offset(conn, length);
+        ngtcp2_conn_shutdown_stream(conn,0,id,CGP_NOT_INTERESTED);
+        return 0;
+    }
     bool fin = flags & NGTCP2_STREAM_DATA_FLAG_FIN;
     receive_context context = {p, s};
     if (!p->notified && p->ready) {
@@ -226,12 +237,13 @@ static int stream_closed(ngtcp2_conn *conn, uint32_t flags, int64_t id,
             cgp_log("channel closed peer=%s channel=%u code=%" PRIu64, p->name, s->channel, code);
         }
         free_stream(p, s);
-        /* One replacement slot for each explicitly opened incoming stream. */
-        bool local_client = !p->engine->listener;
-        if ((id & 1) != (local_client ? 0 : 1)) {
-            if (id & 2) ngtcp2_conn_extend_max_streams_uni(conn, 1);
-            else ngtcp2_conn_extend_max_streams_bidi(conn, 1);
-        }
+    }
+    /* One replacement slot for each incoming stream, including streams
+     * refused because the table was full and never tracked. */
+    bool local_client = !p->engine->listener;
+    if ((id & 1) != (local_client ? 0 : 1)) {
+        if (id & 2) ngtcp2_conn_extend_max_streams_uni(conn, 1);
+        else ngtcp2_conn_extend_max_streams_bidi(conn, 1);
     }
     return 0;
 }
@@ -287,8 +299,8 @@ static int handshake_done(ngtcp2_conn *conn, void *user) {
     if (!tier || (strcmp(tier,"internal") && strcmp(tier,"developer"))) tier = "maker";
     snprintf(p->tier,sizeof(p->tier),"%s",tier);
     p->ready = true;
-    cgp_log("CONNECTED peer=%s fingerprint=%s tier=maker handshake_ms=%" PRIu64,
-            p->name, identity == 0 ? fingerprint : "none", (cgp_now_ns() - p->created) / 1000000);
+    cgp_log("CONNECTED peer=%s fingerprint=%s tier=%s handshake_ms=%" PRIu64,
+            p->name, identity == 0 ? fingerprint : "none", p->tier, (cgp_now_ns() - p->created) / 1000000);
     return 0;
 }
 
@@ -358,8 +370,8 @@ static cgp_peer *new_peer(cgp_engine *e, const struct sockaddr_in *remote,
     params.initial_max_stream_data_bidi_remote = 4096;
     params.initial_max_stream_data_bidi_local = 4096;
     params.initial_max_data = 16384;
-    params.initial_max_streams_uni = 24;
-    params.initial_max_streams_bidi = 24;
+    params.initial_max_streams_uni = CGP_REMOTE_STREAMS_UNI;
+    params.initial_max_streams_bidi = CGP_REMOTE_STREAMS_BIDI;
     params.max_idle_timeout = 90 * NGTCP2_SECONDS;
     params.max_udp_payload_size = 2048; /* Matches read_packets' receive buffer. */
     params.active_connection_id_limit = 2;

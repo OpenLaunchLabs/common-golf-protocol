@@ -182,16 +182,10 @@ impl Drop for Peer {
 /// Draft-specific wire metadata is selected by ALPN. Unknown fields otherwise survive.
 pub fn for_draft(draft: Draft, channel: u32, message: &Value) -> Value {
     let mut value = message.clone();
-    if let Some(fields) = value.as_object_mut() {
-        match (draft, channel) {
-            (Draft::One, 1 | 3) => {
-                fields.remove("estimated");
-            }
-            (Draft::Two, 1) => {
-                fields.remove("reduced_accuracy");
-            }
-            _ => (),
-        }
+    if let (Some(fields), Some(excluded)) =
+        (value.as_object_mut(), draft.excluded_metadata(channel))
+    {
+        fields.remove(excluded);
     }
     value
 }

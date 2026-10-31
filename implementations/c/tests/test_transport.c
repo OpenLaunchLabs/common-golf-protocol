@@ -1,11 +1,12 @@
 /* Native QUIC regression: standard ownership, private JSON, and Open Connect
- * replies share one connection. Schema validation remains a test concern. */
+ * replies share one connection. The device FINs its Open Connect request half,
+ * and the simulator must still be able to reply on that stream. Schema validation remains a test concern. */
 #include "internal.h"
 #include <assert.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <unistd.h>
-typedef struct { bool server; cgp_peer *peer; unsigned messages, private_messages, replies; } test_app;
+typedef struct { bool server; cgp_peer *peer; unsigned messages, private_messages, replies; bool reply_due; } test_app;
 static const char *body="{\"battery_percent\":101,\"future\":true}";
 static void connected(cgp_peer *p,const char *fingerprint,void *user) {
     test_app *a=user;a->peer=p;
@@ -17,16 +18,16 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
     assert(!cgp_publish(p,1000,body));
     assert(cgp_bind_private(p,UINT32_MAX,CGP_PRIVATE_JSON,"io.test.json"));
     assert(cgp_publish(p,UINT32_MAX,"{\"type\":\"private\",\"name\":\"io.test.json\"}"));
-    if (a->server) assert(cgp_publish(p,2,"{\"ShotNumber\":1}"));
+    if (a->server) { assert(cgp_publish(p,2,"{\"ShotNumber\":1}")); assert(cgp_finish_channel(p,2)); }
     else assert(!cgp_publish(p,2,"{\"Code\":200}")); /* device opens */
 }
 static void message(cgp_peer *p,uint32_t channel,const char *json,size_t length,void *user) {
-    test_app *a=user;
+    test_app *a=user;(void)p;
     if(channel==0)return;
     if(channel==UINT32_MAX){++a->private_messages;return;}
     if(channel==2){
         ++a->replies;
-        if(!a->server) assert(cgp_publish(p,2,"{\"Code\":200}"));
+        if(!a->server) a->reply_due=true; /* reply once the request FIN arrives */
         return;
     }
     assert(channel==(a->server ? 6u : 4u));
@@ -46,6 +47,11 @@ int main(void) {
     uint64_t deadline=cgp_now_ns()+UINT64_C(10000000000);
     while(cgp_now_ns()<deadline && (!server.messages || !client.messages || !server.private_messages || !client.private_messages || !server.replies || !client.replies)) {
         cgp_poll(listener);cgp_poll(connector);usleep(1000);
+        if (client.reply_due) {
+            cgp_stream *s=client.peer->streams;
+            while (s && !(s->assigned && s->channel==2)) s=s->next;
+            if (s && s->rx.ended) { assert(cgp_publish(client.peer,2,"{\"Code\":200}")); client.reply_due=false; }
+        }
     }
     assert(server.messages==1 && client.messages==1);
     assert(server.private_messages==1 && client.private_messages==1);

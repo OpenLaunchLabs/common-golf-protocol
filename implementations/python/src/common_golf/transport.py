@@ -27,6 +27,7 @@ class _Stream:
     recv_closed: bool = False
     send_closed: bool = False
     rejected: bool = False
+    stopped: bool = False
 
 
 class Connection(QuicConnectionProtocol):
@@ -99,7 +100,7 @@ class Connection(QuicConnectionProtocol):
 
     def _sending(self, sid):
         state = self._streams[sid]
-        if state.rejected:
+        if state.rejected or state.stopped:
             return None
         if state.send_closed:
             raise ValueError("stream sending half has ended")
@@ -118,22 +119,27 @@ class Connection(QuicConnectionProtocol):
                 del self._outgoing[channel]
         self.transmit()
 
+    def _send_frame(self, stream_id, data, end_stream):
+        state = self._sending(stream_id)
+        if state is None:
+            return False
+        self._write(stream_id, data, end_stream)
+        if state.channel == 0:
+            self._info_sent = True
+        return True
+
     def send(self, stream_id, message, *, end_stream=False):
         state = self._sending(stream_id)
         if state is None:
             return False
-        channel = state.channel
-        self._write(stream_id, frame(message, self._limit(channel)), end_stream)
-        if channel == 0:
-            self._info_sent = True
-        return True
+        return self._send_frame(stream_id, frame(message, self._limit(state.channel)), end_stream)
 
     def publish(self, channel, message, *, end_stream=False):
-        frame(message, self._limit(channel))
+        data = frame(message, self._limit(channel))  # validate before opening a stream
         sid = self._outgoing.get(channel)
         if sid is None:
             sid = self.open(channel)
-        self.send(sid, message, end_stream=end_stream)
+        self._send_frame(sid, data, end_stream)
         return sid
 
     def finish(self, stream_id):
@@ -212,6 +218,9 @@ class Connection(QuicConnectionProtocol):
                     if self._incoming.get(channel) == sid:
                         del self._incoming[channel]
             except ProtocolError as exc:
+                # Frames before the malformed one were valid; deliver them first.
+                for message in exc.messages:
+                    self.on_message(state.channel, message, sid)
                 state.recv_closed = event.end_stream
                 if not event.end_stream:
                     self._quic.stop_stream(sid, exc.code)
@@ -227,10 +236,11 @@ class Connection(QuicConnectionProtocol):
                 self.on_stream_error(sid, exc.code)
         elif isinstance(event, StopSendingReceived):
             state = self._streams.get(event.stream_id)
-            self.on_declined(state.channel if state else None, event.stream_id, event.error_code)
             if state:
-                state.send_closed = True
+                # Later sends on this stream return False, as for declined streams.
+                state.send_closed = state.stopped = True
                 self._release(event.stream_id)
+            self.on_declined(state.channel if state else None, event.stream_id, event.error_code)
         elif isinstance(event, StreamReset):
             state = self._streams.get(event.stream_id)
             if state:

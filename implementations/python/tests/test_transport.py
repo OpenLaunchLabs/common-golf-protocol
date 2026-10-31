@@ -40,6 +40,13 @@ class Recorder(Connection):
         self.declined.append(code)
 
 
+class ResendOnDecline(Recorder):
+    """Sending on a stopped stream is a declined send, not an exception."""
+    def on_declined(self, channel, stream_id, code):
+        super().on_declined(channel, stream_id, code)
+        self.resent = getattr(self, "resent", []) + [self.send(stream_id, {"type": "info"})]
+
+
 def test_channel_failures_are_stream_local_and_connections_independent(tmp_path):
     async def run():
         identity = Identity(tmp_path / "server")
@@ -138,7 +145,7 @@ def test_duplicate_stop_sending_is_idempotent_over_real_quic(tmp_path, sdk):
         loop.set_exception_handler(lambda _, context: errors.append(context))
         server = await serve("127.0.0.1", 0, configuration=server_id.configuration(is_client=False), create_protocol=RepeatedStop)
         try:
-            factory = partial(Recorder, role="device") if sdk else PlainProbe
+            factory = partial(ResendOnDecline, role="device") if sdk else PlainProbe
             async with connect("127.0.0.1", server._transport.get_extra_info("sockname")[1],
                                configuration=client_id.configuration(is_client=True), create_protocol=factory) as client:
                 if not sdk:
@@ -146,6 +153,8 @@ def test_duplicate_stop_sending_is_idempotent_over_real_quic(tmp_path, sdk):
                     client._quic.send_stream_data(sid, b"probe")
                     client.transmit()
                 await until(lambda: len(client.declined if sdk else client.stops) >= 2)
+                if sdk:
+                    assert client.resent and not any(client.resent), client.resent
                 # Unrelated transport work keeps progressing after both STOPs.
                 await asyncio.wait_for(client.ping(), 1)
                 assert not errors, errors

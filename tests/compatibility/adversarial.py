@@ -24,7 +24,7 @@ from run import ROOT, stop
 EXPECTED = {
     'baseline_channels', 'open_connect_reply_without_prefix', 'reserved_stop_1',
     'wrong_owner_stop_1', 'duplicate_stop_1', 'oversize_stop_2', 'zero_stop_2',
-    'nonobject_stop_2', 'invalid_json_stop_2', 'truncated_fin_discard_and_reopen',
+    'nonobject_stop_2', 'invalid_json_stop_2', 'nonfinite_stop_2', 'truncated_fin_discard_and_reopen',
     'maximum_65535_and_fragmented_header', 'multiple_independent_clients',
     'connection_survives_stream_errors',
 }
@@ -105,6 +105,7 @@ async def exercise(port, draft, directory, listener_output):
             ('zero_stop_2', 7, struct.pack('>I', 0), 2),
             ('nonobject_stop_2', 7, struct.pack('>I', 2) + b'[]', 2),
             ('invalid_json_stop_2', 7, struct.pack('>I', 2) + b'{!', 2),
+            ('nonfinite_stop_2', 7, struct.pack('>I', 11) + b'{"n":1e999}', 2),
         ]:
             sid = first.inject(channel, body)
             await until(lambda: sid in first.stops, f'{label}: STOP_SENDING for stream {sid}')

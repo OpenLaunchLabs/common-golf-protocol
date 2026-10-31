@@ -17,7 +17,14 @@
 
 #define CGP_CHANNELS 9
 #define CGP_TX_LIMIT (4 * 65543)
-#define CGP_MAX_STREAMS 32
+/* Streams the remote may open (QUIC transport parameters), plus room for our
+ * own. Tracking covers every stream a well-behaved peer can open, so refusals
+ * only happen when our own sends exceed CGP_LOCAL_STREAMS. Streams are
+ * allocated on demand; the cap costs nothing until it is used. */
+#define CGP_REMOTE_STREAMS_UNI 24
+#define CGP_REMOTE_STREAMS_BIDI 24
+#define CGP_LOCAL_STREAMS 16
+#define CGP_MAX_STREAMS (CGP_REMOTE_STREAMS_UNI + CGP_REMOTE_STREAMS_BIDI + CGP_LOCAL_STREAMS)
 
 typedef struct cgp_buffer {
     struct cgp_buffer *next;

@@ -1,6 +1,6 @@
 set(NGTCP2_ROOT "${CGP_DEPENDENCIES}/ngtcp2")
 if(NOT EXISTS "${NGTCP2_ROOT}/lib/includes/ngtcp2/ngtcp2.h")
-    message(FATAL_ERROR "Run python3 scripts/fetch_deps.py before configuring")
+    message(FATAL_ERROR "Run python3 implementations/c/tools/fetch_deps.py before configuring")
 endif()
 file(GLOB NGTCP2_SOURCES "${NGTCP2_ROOT}/lib/*.c")
 list(APPEND NGTCP2_SOURCES

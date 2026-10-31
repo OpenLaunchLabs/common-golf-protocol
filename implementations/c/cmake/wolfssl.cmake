@@ -1,6 +1,6 @@
 set(WOLFSSL_ROOT "${CGP_DEPENDENCIES}/wolfssl")
 if(NOT EXISTS "${WOLFSSL_ROOT}/wolfssl/ssl.h")
-    message(FATAL_ERROR "Run python3 scripts/fetch_deps.py before configuring")
+    message(FATAL_ERROR "Run python3 implementations/c/tools/fetch_deps.py before configuring")
 endif()
 set(WOLFSSL_SOURCES
     ${WOLFSSL_ROOT}/src/ssl.c
