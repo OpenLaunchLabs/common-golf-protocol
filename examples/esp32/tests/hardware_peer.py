@@ -20,7 +20,6 @@ import sys
 import struct
 import tempfile
 import time
-import uuid
 
 import jsonschema
 from aioquic.quic.events import ConnectionTerminated
@@ -32,7 +31,8 @@ import common_golf as cg
 VALIDATORS = {
     number: jsonschema.Draft202012Validator(
         json.loads((EXAMPLES.parent / "schema" / f"{name}.json").read_text()))
-    for name, number in cg.CHANNELS.items()
+    for name, number in {"info": 0, "shot": 1, "club": 3, "device_status": 4,
+                         "control": 5, "simulator_state": 6, "result": 7, "flight": 8}.items()
 }
 COMMANDS = "left right up down reset_aim club_up club_down putter_toggle mulligan rehit drop tee_left tee_right switch_hand flyover shot_cam scorecard heatmap map green_grid pin hide_ui select back".split()
 
@@ -70,7 +70,7 @@ class Tracked(cg.Connection):
 
     def __init__(self, *args, run, label, quiet_after=None,
                  shot_interval=2, control_interval=1, **kwargs):
-        super().__init__(*args, read_channels=self.READS, **kwargs)
+        super().__init__(*args, read_channels=self.READS, draft=cg.Draft.THREE, **kwargs)
         self.run = run
         self.label = label
         self.received = Counter()
@@ -196,12 +196,12 @@ class SimulatorProbe(Tracked):
 
     def on_connected(self):
         self.begin([0, 6, 7])
-        self.emit(6, {"type": "state", "ready": True, "mode": "range",
+        self.emit(6, {"type": "simulator_state", "ready": True, "requested_capture_mode": "full",
                       "player": {"name": "Hardware test", "dexterity": "right"}})
 
     def received_valid(self, channel, message):
-        if channel == 1 and message.get("final", True):
-            self.emit(7, {"type": "result", "shot_number": message["shot_number"],
+        if channel == 1:
+            self.emit(7, {"type": "result", "shot_uuid": message["shot_uuid"],
                           "accepted": True, "carry_distance_meters": 155.0,
                           "total_distance_meters": 165.0, "max_height_meters": 24.0})
 
@@ -213,7 +213,7 @@ class LaunchFixture(Tracked):
         self.workload = {"shot_interval_seconds": self.shot_interval,
                          "target_shots_per_second": 1 / self.shot_interval}
         self.begin([0, 1, 3, 4, 8])
-        self.emit(4, {"type": "status", "ready": True, "ball_detected": False,
+        self.emit(4, {"type": "device_status", "ready": True, "ball_detected": False,
                       "message": "Synthetic hardware-test launch monitor"})
         self.start_task(self.shots())
 
@@ -221,26 +221,27 @@ class LaunchFixture(Tracked):
         number = 0
         async for _ in self.publication_ticks(self.shot_interval):
             number += 1
-            self.emit(4, {"type": "status", "ball_detected": True})
-            shot = {"type": "shot", "shot_number": number, "final": True,
-                    "measurement_id": str(uuid.uuid4()), "player_dexterity": "right",
+            shot_uuid = cg.new_shot_uuid()
+            self.emit(4, {"type": "device_status", "ball_detected": True})
+            shot = {"type": "shot", "shot_uuid": shot_uuid,
+                    "player_dexterity": "right",
                     "ball_speed_meters_per_second": 60.0,
                     "vertical_launch_angle_degrees": 13.0,
                     "horizontal_launch_angle_degrees": -2.0,
                     "total_spin_revolutions_per_minute": 2800,
                     "spin_axis_degrees": -3.0}
             shot["estimated"] = [key for key, value in shot.items()
-                                 if type(value) in (int, float) and key != "shot_number"]
+                                 if type(value) in (int, float)]
             self.emit(1, shot)
-            self.emit(3, {"type": "club", "shot_number": number, "final": True,
+            self.emit(3, {"type": "club", "shot_uuid": shot_uuid,
                           "club_speed_meters_per_second": 41.4,
                           "club_path_degrees": -1.0,
                           "estimated": ["club_speed_meters_per_second", "club_path_degrees"]})
-            self.emit(8, {"type": "flight", "shot_number": number, "final": True,
+            self.emit(8, {"type": "flight", "shot_uuid": shot_uuid,
                           "carry_distance_meters": 153.0, "total_distance_meters": 162.0,
                           "carry_side_meters": -3.8, "max_height_meters": 24.0,
                           "hang_time_seconds": 5.5})
-            self.emit(4, {"type": "status", "ball_detected": False})
+            self.emit(4, {"type": "device_status", "ball_detected": False})
 
 
 class ControlFixture(Tracked):
@@ -278,7 +279,7 @@ async def listen(args, run, identity_dir):
                        control_interval=args.control_interval, **keywords)
         async def serve_fixture(label=label, factory=factory):
             identity = cg.Identity(identity_dir / label, label)
-            async with cg.listen(label, identity, factory, properties={"vendor": "CGP hardware test", "model": label}):
+            async with cg.listen(label, identity, factory, draft=cg.Draft.THREE, properties={"vendor": "CGP hardware test", "model": label}):
                 await asyncio.Event().wait()
         task = asyncio.create_task(serve_fixture())
         listeners.append(task)
@@ -305,9 +306,9 @@ async def listen(args, run, identity_dir):
                 assert peer.quiet_started is not None, f"{label}: quiet period never began"
                 # A run long enough to test the negotiated idle timeout must
                 # actually observe it, even if discovery took unexpectedly long.
-                if args.duration - args.quiet_after >= 90.0:
+                if args.duration - args.quiet_after >= 30.0:
                     idle = time.monotonic() - peer.last_application_activity
-                    assert idle >= 90.0, f"{label}: only {idle:.1f}s application-idle; need {90.0:g}s"
+                    assert idle >= 30.0, f"{label}: only {idle:.1f}s application-idle; need {30.0:g}s"
             await asyncio.wait_for(peer.ping(), 5)
             print("PING_OK " + json.dumps(peer.summary(), sort_keys=True), flush=True)
         assert len({p.peer_fingerprint for p in run.peers if p.was_connected}) == 1, "Fixtures saw different board identities"
@@ -348,7 +349,7 @@ async def probe(args, run, identity_dir):
                 def factory(*positional, label=label, **keywords):
                     return SimulatorProbe(*positional, run=run, label=label, role="sim", info={"name": label}, **keywords)
                 identity = cg.Identity(identity_dir / label, label)
-                peer = await asyncio.wait_for(stack.enter_async_context(cg.dial(discovered, identity, factory)), 25)
+                peer = await asyncio.wait_for(stack.enter_async_context(cg.dial(discovered, identity, factory, draft=cg.Draft.THREE)), 25)
                 peers.append(peer)
             required = {0, 1, 3, 4, 8} if role == "launch-monitor" else {0, 5}
             if args.max_frame:
@@ -358,15 +359,15 @@ async def probe(args, run, identity_dir):
                     if time.monotonic() >= deadline:
                         raise AssertionError("No initial role traffic before maximum-frame test")
                     await asyncio.sleep(.1)
-                initial = json.dumps({"type": "state", "padding": ""}, separators=(",", ":"))
-                message = {"type": "state", "padding": "x" * (65535 - len(initial))}
+                initial = json.dumps({"type": "simulator_state", "padding": ""}, separators=(",", ":"))
+                message = {"type": "simulator_state", "padding": "x" * (65535 - len(initial))}
                 VALIDATORS[6].validate(message)
                 body = json.dumps(message, separators=(",", ":")).encode()
                 assert len(body) == 65535
                 first = peers[0]
                 first._quic.send_stream_data(first.outgoing[6], struct.pack(">I", len(body)) + body)
                 first.sent[6] += 1
-                first.emit(6, {"type": "state", "mode": "putting"})
+                first.emit(6, {"type": "simulator_state", "requested_capture_mode": "putting"})
                 print("SENT_MAX_FRAME peer=hardware-probe-1 bytes=65535 marker=putting; confirm marker in board serial log", flush=True)
                 await asyncio.wait_for(first.ping(), 15)
             await run.observe(args.duration)
@@ -375,7 +376,7 @@ async def probe(args, run, identity_dir):
                 assert peer.peer_info.get("model") == "ESP-WROOM-32", "Peer is not ESP32 mock firmware"
                 assert peer.peer_fingerprint, "Board supplied no Ed25519 identity"
                 if role == "launch-monitor":
-                    assert peer.sent[7] > 0, "No final shots received"
+                    assert peer.sent[7] > 0, "No shots received"
                 await asyncio.wait_for(peer.ping(), 5)
             assert peers[0].peer_fingerprint == peers[1].peer_fingerprint, "Board identity differs across connections"
             run.check()

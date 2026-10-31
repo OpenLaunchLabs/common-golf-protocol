@@ -13,7 +13,7 @@ use std::{
 
 /// Bound on waiting for CONNECTION_CLOSE to leave the socket. Without the
 /// wait, an application that exits right after a close can drop the packet,
-/// and the peer only notices at the 90 second idle timeout.
+/// and the peer only notices at the negotiated idle timeout.
 const CLOSE_FLUSH: Duration = Duration::from_secs(1);
 
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }
@@ -38,8 +38,12 @@ unsafe fn string<'a>(p: *const c_char) -> Result<&'a str> {
 struct Config {
     identity_directory: String,
     role: String,
+    #[serde(default = "default_draft")]
     draft: u32,
     info: serde_json::Value,
+}
+fn default_draft() -> u32 {
+    3
 }
 pub struct CgpEndpoint {
     runtime: tokio::runtime::Runtime,
@@ -88,8 +92,11 @@ pub unsafe extern "C" fn cgp_create(config: *const c_char, out: *mut *mut CgpEnd
             "device_controller" => Role::DeviceController,
             _ => bail!("invalid role"),
         };
-        ensure!(config.draft == 2, "ABI v1 supports draft 2 only");
-        let draft = Draft::Two;
+        let draft = match config.draft {
+            2 => Draft::Two,
+            3 => Draft::Three,
+            _ => bail!("ABI v1 supports drafts 2 and 3"),
+        };
         let identity = Identity::load_or_create(Path::new(&config.identity_directory))?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -164,12 +171,19 @@ pub unsafe extern "C" fn cgp_connect(
                     let _ = tokio::time::timeout(CLOSE_FLUSH, connected.endpoint.wait_idle()).await;
                     bail!("peer fingerprint mismatch");
                 }
-                let peer = Peer::without_open_connect(
-                    connected.connection.clone(),
-                    h.role,
-                    h.info.clone(),
-                )
-                .await?;
+                let peer = if h.draft == Draft::Three {
+                    Peer::with_contracts(
+                        connected.connection.clone(),
+                        h.role,
+                        h.info.clone(),
+                        Vec::new(),
+                        Some(expected),
+                    )
+                    .await?
+                } else {
+                    Peer::without_open_connect(connected.connection.clone(), h.role, h.info.clone())
+                        .await?
+                };
                 Ok::<_, anyhow::Error>((connected, peer))
             })
             .await?

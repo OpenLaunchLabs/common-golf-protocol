@@ -6,7 +6,8 @@ Discovery instead of IP addresses. Encrypted and authenticated by the
 transport, so no application-level crypto. Channels work like topics: one
 owner, one direction, no acknowledgements.
 
-Status: draft 2. Everything here is provisional.
+Status: draft 3 discussion, unreleased. Published draft 1 and draft 2 remain
+available as compatibility profiles.
 
 ## Reference implementations
 
@@ -16,7 +17,8 @@ Status: draft 2. Everything here is provisional.
 | [Rust crate](implementations/rust/README.md) | `cargo build --manifest-path implementations/rust/Cargo.toml` | noq / rustls |
 | [C library](implementations/c/README.md) | CMake; also used by the ESP32 demo | ngtcp2 / wolfSSL |
 
-All three support draft 1 and draft 2; new applications should use draft 2.
+All three support drafts 1 and 2 and the unreleased
+[draft 3 proposal](implementations/DRAFT3.md) for interoperability testing.
 The Python package and Rust crate are not yet published. The
 [implementation guide](implementations/README.md#build-and-test) covers
 building and the [cross-language tests](tests/compatibility/README.md).
@@ -42,8 +44,8 @@ and a device serves all of them.
 | Script | What it shows |
 |---|---|
 | `launch_monitor_minimum.py` | Three-number shots on channel 1. Shortest conforming device. |
-| `launch_monitor_full.py` | Status, preliminary/final shots with spin and metadata, club data, computed flight. Gates club/flight by the simulator's trust tier. |
-| `launch_monitor_open_connect.py` | A GSPro Open Connect v1 device moved to QUIC with its JSON unchanged. Needs a simulator that offers channel 2; this one does. |
+| `launch_monitor_full.py` | Device status, shot snapshots with spin and metadata, club data, computed flight. Gates club/flight by the simulator's trust tier. |
+| `launch_monitor_open_connect.py` | A GSPro Open Connect v1 device moved to QUIC. Uses the listener's Open Connect contract in draft 3, or channel 2 in drafts 1/2. |
 | `swing_speed_radar.py` | Club speed with no ball data. |
 | `control_box.py` | Virtual button presses. |
 
@@ -56,8 +58,9 @@ To see trust tiers, print the simulator's fingerprint and list it:
 ```
 
 The examples use the Python package in `implementations/python`, and their
-measurements are synthetic. They default to draft 2; pass `--draft 1` to both
-ends for draft 1. Rust and C versions are in `examples/rust` and `examples/c`.
+measurements are synthetic. They default to the draft 3 proposal; pass
+`--draft 1` or `--draft 2` to both ends for a published draft. Rust and C
+versions are in `examples/rust` and `examples/c`.
 
 ## Try ESP32 hardware
 
@@ -68,7 +71,8 @@ discovers both.
 ## Then read the spec
 
 [`rfc/0001-common-golf-protocol.md`](rfc/0001-common-golf-protocol.md) is
-the whole protocol. `schema/` holds one JSON Schema per channel.
+the working draft 3 proposal. `schema/` holds its message schemas, with frozen
+draft 1 and draft 2 snapshots in separate directories.
 
 ## Changing it
 

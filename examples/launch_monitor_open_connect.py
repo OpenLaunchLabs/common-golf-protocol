@@ -1,4 +1,4 @@
-"""Existing Open Connect bodies over bidirectional QUIC channel 2."""
+"""Open Connect over a draft 3 custom channel, or legacy channel 2."""
 import argparse
 import asyncio
 from functools import partial
@@ -6,11 +6,17 @@ import json
 import random
 from pathlib import Path
 
-from common_golf import Connection, Draft, Identity, listen
+from common_golf import Connection, Draft, Identity, listen, OPEN_CONNECT, new_shot_uuid
 
 
 class Device(Connection):
     """Open Connect device; replies share the opening stream without a second prefix."""
+
+    def __init__(self, *args, **kwargs):
+        if Draft(kwargs.get("draft", Draft.THREE)) == Draft.THREE:
+            kwargs["contracts"] = {OPEN_CONNECT.identifier: OPEN_CONNECT}
+            kwargs["menu"] = [{"channel": 1003, "contract": OPEN_CONNECT.identifier}]
+        super().__init__(*args, **kwargs)
 
     def on_connected(self):
         print(f"connected fingerprint={self.peer_fingerprint} tier={self.peer_tier}", flush=True)
@@ -19,7 +25,8 @@ class Device(Connection):
     async def publish_measurements(self):
         number = 1
         while True:
-            self.publish(2, {
+            self.publish(1003 if self.draft == Draft.THREE else 2, {
+                **({"shot_uuid": new_shot_uuid()} if self.draft == Draft.THREE else {}),
                 "DeviceID": "open-connect-device",
                 "Units": "Yards",
                 "ShotNumber": number,
@@ -50,7 +57,7 @@ class Device(Connection):
 
 def main():
     arguments = argparse.ArgumentParser(description=__doc__)
-    arguments.add_argument("--draft", type=int, choices=(1, 2), default=2)
+    arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
     arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")

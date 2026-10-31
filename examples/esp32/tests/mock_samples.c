@@ -4,8 +4,10 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static uint64_t now;
+static cgp_draft draft = CGP_DRAFT_3;
 static uint32_t random_state = UINT32_C(0x8a07b32f);
 static unsigned counts[CGP_CHANNELS];
 static bool arrow_held;
@@ -71,7 +73,7 @@ static cgp_peer *initialize(cgp_engine *engine, cgp_role role)
     unsigned i;
     memset(engine, 0, sizeof(*engine));
     engine->role = role;
-    engine->draft = CGP_DRAFT_2;
+    engine->draft = draft;
     snprintf(engine->name, sizeof(engine->name), "Demo \"quoted\" \\ name\n");
     engine->peers[0].engine = engine;
     for (i = 0; i < CGP_CHANNELS; ++i)
@@ -79,8 +81,10 @@ static cgp_peer *initialize(cgp_engine *engine, cgp_role role)
     return &engine->peers[0];
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc > 1) draft = (cgp_draft)atoi(argv[1]);
+    assert(draft >= CGP_DRAFT_1 && draft <= CGP_DRAFT_3);
     cgp_engine engine;
     cgp_peer *peer = initialize(&engine, CGP_LAUNCH_MONITOR);
     cJSON *message;
@@ -122,6 +126,16 @@ int main(void)
                           "\"vertical_launch_angle_degrees\":12,"
                           "\"horizontal_launch_angle_degrees\":-2,\"final\":false}");
     assert(message);
+    if (draft == CGP_DRAFT_3) {
+        cJSON_AddStringToObject(message, "shot_uuid", "017f22e2-79b0-7cc3-98c4-dc0c0c07398f");
+        cgp_mock_receive(peer, 1, message);
+        assert(peer->started && counts[0] == 3 && counts[6] == 1 && counts[7] == 1);
+        cJSON_ReplaceItemInObjectCaseSensitive(message, "shot_uuid", cJSON_CreateString("invalid"));
+        cgp_mock_receive(peer, 1, message);
+        assert(counts[7] == 1);
+        cJSON_Delete(message);
+        return 0;
+    }
     /* Incoming streams may arrive before the info stream. */
     cgp_mock_receive(peer, 1, message);
     assert(peer->started && counts[0] == 3 && counts[6] == 1 && counts[7] == 0);

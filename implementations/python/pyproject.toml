@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "common-golf-protocol"
-version = "0.2.0"
-description = "Common Golf Protocol reference implementation for drafts 1 and 2"
+version = "0.3.0"
+description = "Common Golf Protocol reference implementation for drafts 1, 2 and 3"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"

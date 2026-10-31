@@ -12,26 +12,85 @@
 #include <unistd.h>
 #include <signal.h>
 
-typedef struct { FILE *output; bool listener; const char *version; unsigned received; bool connected; cJSON *fixtures; } app;
+typedef struct { FILE *output; bool listener; const char *version; unsigned received; bool connected; cJSON *fixtures; unsigned datagrams; uint64_t next_datagram; } app;
 static volatile sig_atomic_t done;
 static void stop(int n) { (void)n; done=1; }
+static void emit_fixtures(cgp_peer *p,app *a,bool custom) {
+    char draft[2]={(char)('0'+cgp_peer_draft(p)),0};
+    cJSON *rows=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(a->fixtures,"drafts"),draft),a->listener ? "listen" : "connect"),*row;
+    cJSON_ArrayForEach(row,rows) {
+        cJSON *channel=cJSON_GetObjectItemCaseSensitive(row,"channel");
+        if(!cJSON_IsNumber(channel))continue;
+        uint32_t ch=(uint32_t)channel->valuedouble;if((ch>=1000)!=custom)continue;
+        char *json=cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(row,"message"));
+        if(json){cgp_publish(p,ch,json);free(json);}
+    }
+}
+static int contract(cgp_peer *p,const char *name,void *user) {
+    (void)p;(void)user;
+    if(!strcmp(name,"io.common-golf.interop-json-v1") || !strcmp(name,"io.common-golf.open-connect-v1"))return CGP_PRIVATE_JSON;
+    if(!strcmp(name,"io.common-golf.interop-raw-v1"))return CGP_PRIVATE_RAW;
+    if(!strcmp(name,"io.common-golf.interop-datagram-v1"))return CGP_PRIVATE_DATAGRAM;
+    return -1;
+}
+static void menu(cgp_peer *p,bool ready,void *user) {
+    app *a=user;fprintf(a->output,"{\"kind\":\"menu\",\"ready\":%s}\n",ready ? "true" : "false");fflush(a->output);
+    if(!ready)return;
+    if(a->fixtures)emit_fixtures(p,a,true);
+    else if(a->listener) {
+        cgp_publish(p,1000,"{\"type\":\"private\",\"name\":\"io.common-golf.interop-json-v1\",\"message\":\"opaque JSON ☃\"}");
+        cgp_publish(p,1003,"{\"DeviceID\":\"C reference\",\"Units\":\"Yards\",\"ShotNumber\":2,\"APIversion\":\"1\",\"BallData\":{\"SpinAxis\":0,\"TotalSpin\":2500,\"Speed\":150,\"VLA\":12,\"HLA\":0},\"ShotDataOptions\":{\"ContainsBallData\":true,\"ContainsClubData\":false}}");
+    }
+    static const uint8_t bytes[]={0,255,128,0,'a','b','c'};
+    int64_t stream=cgp_open_raw(p,1001,false);
+    if(stream>=0){cgp_send_raw_on_stream(p,stream,bytes,sizeof(bytes));cgp_finish_stream(p,stream);}
+    cgp_send_datagram(p,1002,bytes,sizeof(bytes));
+}
+static void tick(cgp_peer *p,void *user) {
+    app *a=user;
+    if(cgp_peer_draft(p)==CGP_DRAFT_3 && cgp_custom_ready(p) && a->datagrams<10 && cgp_now_ns()>=a->next_datagram) {
+        static const uint8_t bytes[]={0,255,128,0,'a','b','c'};
+        if(cgp_send_datagram(p,1002,bytes,sizeof(bytes))){++a->datagrams;a->next_datagram=cgp_now_ns()+100000000;}
+    }
+}
+static void binary(app *a,const char *kind,uint32_t channel,uint64_t sequence,const uint8_t *bytes,size_t length) {
+    fprintf(a->output,"{\"kind\":\"%s\",\"channel\":%u,\"sequence\":%llu,\"payload_hex\":\"",kind,channel,(unsigned long long)sequence);
+    for(size_t i=0;i<length;++i)fprintf(a->output,"%02x",bytes[i]);fputs("\"}\n",a->output);fflush(a->output);++a->received;
+}
+static void raw(cgp_peer *p,int64_t stream,uint32_t channel,const uint8_t *bytes,size_t length,bool fin,void *user) {
+    (void)p;(void)stream;(void)fin;binary(user,"raw",channel,0,bytes,length);
+}
+static void datagram(cgp_peer *p,uint32_t channel,uint64_t sequence,const uint8_t *bytes,size_t length,void *user) {
+    (void)p;binary(user,"datagram",channel,sequence,bytes,length);
+}
 static void connected(cgp_peer *p,const char *fingerprint,void *user) {
     app *a=user; a->connected=true;
     fprintf(a->output,"{\"kind\":\"connected\",\"fingerprint\":\"%s\",\"alpn\":\"%s\"}\n",fingerprint ? fingerprint : "",cgp_alpn(cgp_peer_draft(p))); fflush(a->output);
     char info[256];
     snprintf(info,sizeof(info),"{\"type\":\"info\",\"protocol_version\":\"%s\",\"name\":\"C reference\"}",a->version ? a->version : cgp_protocol_version(cgp_peer_draft(p)));
+    if(cgp_peer_draft(p)!=CGP_DRAFT_3 || a->listener)cgp_bind_private(p,1000,CGP_PRIVATE_JSON,"io.common-golf.interop-json-v1");
+    if(cgp_peer_draft(p)==CGP_DRAFT_3 && a->listener) {
+        cgp_bind_private(p,1001,CGP_PRIVATE_RAW,"io.common-golf.interop-raw-v1");
+        cgp_bind_private(p,1002,CGP_PRIVATE_DATAGRAM,"io.common-golf.interop-datagram-v1");
+        cgp_bind_private(p,1003,CGP_PRIVATE_JSON,"io.common-golf.open-connect-v1");
+    }
     cgp_publish(p,0,info);
-    cgp_bind_private(p,1000,CGP_PRIVATE_JSON,"io.common-golf.interop-json-v1");
-    if (a->fixtures) {
-        char draft[2]={(char)('0'+cgp_peer_draft(p)),0};
-        cJSON *entries=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(a->fixtures,"drafts"),draft),a->listener ? "listen" : "connect"),*entry;
-        cJSON_ArrayForEach(entry,entries) {
-            unsigned ch=(unsigned)cJSON_GetObjectItemCaseSensitive(entry,"channel")->valuedouble;
-            char *json=cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(entry,"message"));
-            if (json) {cgp_publish(p,ch,json);free(json);}
-        }
+    if(a->fixtures) {
+        emit_fixtures(p,a,false);
+        if(cgp_peer_draft(p)!=CGP_DRAFT_3)emit_fixtures(p,a,true);
     } else
-    if (a->listener) {
+    if(cgp_peer_draft(p)==CGP_DRAFT_3) {
+        if(a->listener) {
+            cgp_publish(p,1,"{\"type\":\"shot\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"ball_speed_meters_per_second\":60.5,\"vertical_launch_angle_degrees\":12.5,\"horizontal_launch_angle_degrees\":-1.5,\"estimated\":[\"ball_speed_meters_per_second\"]}");
+            cgp_publish(p,3,"{\"type\":\"club\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"club_speed_meters_per_second\":40}");
+            cgp_publish(p,4,"{\"type\":\"device_status\",\"ready\":true,\"battery_percent\":75}");
+            cgp_publish(p,5,"{\"type\":\"control\",\"command\":\"left\",\"event\":\"press\"}");
+            cgp_publish(p,8,"{\"type\":\"flight\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"carry_distance_meters\":200}");
+        } else {
+            cgp_publish(p,6,"{\"type\":\"simulator_state\",\"ready\":true,\"requested_capture_mode\":\"full\"}");
+            cgp_publish(p,7,"{\"type\":\"result\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"accepted\":true,\"carry_distance_meters\":200}");
+        }
+    } else if (a->listener) {
         char shot[512];
         snprintf(shot,sizeof(shot),"{\"type\":\"shot\",\"shot_number\":1,\"ball_speed_meters_per_second\":60.5,\"vertical_launch_angle_degrees\":12.5,\"horizontal_launch_angle_degrees\":-1.5,%s}",
             cgp_peer_draft(p)==CGP_DRAFT_1 ? "\"reduced_accuracy\":true" : "\"estimated\":[\"ball_speed_meters_per_second\"]");
@@ -50,7 +109,7 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
 static void message(cgp_peer *p,uint32_t ch,const char *json,size_t length,void *user) {
     app *a=user;
     fprintf(a->output,"{\"channel\":%u,\"message\":%.*s}\n",ch,(int)length,json); fflush(a->output); ++a->received;
-    if (ch==2 && !a->listener) cgp_publish(p,2,"{\"Code\":200,\"Message\":\"Shot received\"}");
+    if ((ch==2 || cgp_private_matches(p,ch,"io.common-golf.open-connect-v1")) && !a->listener) cgp_publish(p,ch,"{\"Code\":200,\"Message\":\"Shot received\"}");
 }
 #ifdef CGP_HAVE_DNSSD
 static void discovered(const char *name,const struct sockaddr_in *address,void *user) {
@@ -64,7 +123,7 @@ static void discovered(const char *name,const struct sockaddr_in *address,void *
 }
 #endif
 int main(int argc,char **argv) {
-    int draft=2,port=0; double duration=3; const char *role="listen",*host="127.0.0.1",*output=NULL,*identity=NULL,*version=NULL,*advertise=NULL,*fixtures=NULL;
+    int draft=3,port=0; double duration=3; const char *role="listen",*host="127.0.0.1",*output=NULL,*identity=NULL,*version=NULL,*advertise=NULL,*fixtures=NULL,*expected_key=NULL;
     for (int i=1;i<argc;i+=2) {
         if (i+1>=argc) return 2;
         const char *key=argv[i],*value=argv[i+1];
@@ -77,10 +136,11 @@ int main(int argc,char **argv) {
         else if (!strcmp(key,"--version")) version=value;
         else if (!strcmp(key,"--advertise")) advertise=value;
         else if (!strcmp(key,"--fixtures")) fixtures=value;
+        else if (!strcmp(key,"--expected-key")) expected_key=value;
         else if (!strcmp(key,"--duration")) duration=atof(value);
         else return 2;
     }
-    if (draft<1 || draft>2 || port<0 || port>65535 || duration<=0 || (strcmp(role,"listen") && strcmp(role,"connect") && strcmp(role,"discover"))) return 2;
+    if (draft<1 || draft>3 || port<0 || port>65535 || duration<=0 || (strcmp(role,"listen") && strcmp(role,"connect") && strcmp(role,"discover"))) return 2;
     app a={.listener=!strcmp(role,"listen"),.version=version};
     if (fixtures) {
         FILE *f=fopen(fixtures,"rb");if(!f)return 1;fseek(f,0,SEEK_END);long size=ftell(f);rewind(f);
@@ -100,20 +160,20 @@ int main(int argc,char **argv) {
     if (!strcmp(role,"discover") || advertise) {fputs("DNS-SD development library required\n",stderr);return 2;}
 #endif
     cgp_options options={.role=a.listener ? CGP_LAUNCH_MONITOR : CGP_SIMULATOR,.draft=(cgp_draft)draft,.listener=a.listener,
-        .name="C reference",.identity_directory=identity,.callbacks={.connected=connected,.message=message},.user=&a};
+        .name="C reference",.identity_directory=identity,.callbacks={.connected=connected,.message=message,.contract=contract,.menu=menu,.raw_stream=raw,.datagram=datagram,.tick=tick},.user=&a};
     inet_pton(AF_INET,"127.0.0.1",&options.local_ip);
     cgp_engine *engine=cgp_create_options(&options); if (!engine) return 1;
     setvbuf(stdout,NULL,_IOLBF,0); signal(SIGTERM,stop); signal(SIGINT,stop);
 #ifdef CGP_HAVE_DNSSD
     if (advertise) {
-        discovery=cgp_discovery_start(advertise,cgp_port(engine),NULL,NULL);
+        discovery=draft==3 ? cgp_discovery_start_key(advertise,cgp_port(engine),cgp_identity(engine),"draft-3","ball,club,control",NULL,NULL) : cgp_discovery_start(advertise,cgp_port(engine),NULL,NULL);
         if (!discovery) return 1;
     }
 #endif
-    if (a.listener) printf("READY %u\n",cgp_port(engine));
+    if (a.listener) printf("KEY %s\nREADY %u\n",cgp_identity(engine),cgp_port(engine));
     else {
         struct sockaddr_in remote={.sin_family=AF_INET,.sin_port=htons((uint16_t)port)};
-        if (!port || inet_pton(AF_INET,host,&remote.sin_addr)!=1 || !cgp_connect(engine,&remote,"fixture")) return 1;
+        if (!port || inet_pton(AF_INET,host,&remote.sin_addr)!=1 || !cgp_connect_key(engine,&remote,"fixture",expected_key)) return 1;
     }
     uint64_t end=cgp_now_ns()+(uint64_t)(duration*1e9);
     while (!done && cgp_now_ns()<end) {

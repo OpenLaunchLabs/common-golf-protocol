@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #define MILLISECOND UINT64_C(1000000)
 #define SECOND UINT64_C(1000000000)
@@ -52,6 +53,32 @@ static bool publish(cgp_peer *peer, unsigned channel, const char *format, ...)
         bool estimated = cJSON_HasObjectItem(object,"estimated");
         cJSON_DeleteItemFromObjectCaseSensitive(object,"estimated");
         if (estimated && channel == 1) cJSON_AddBoolToObject(object,"reduced_accuracy",true);
+        char *converted = cJSON_PrintUnformatted(object);
+        bool ok = converted && cgp_publish(peer,channel,converted);
+        cJSON_free(converted); cJSON_Delete(object); return ok;
+    }
+    if (cgp_peer_draft(peer) == CGP_DRAFT_3) {
+        cJSON *object = cJSON_Parse(json);
+        if (!object) return false;
+        if (channel == 1 || channel == 3 || channel == 7 || channel == 8) {
+            cJSON_DeleteItemFromObjectCaseSensitive(object, "shot_number");
+            cJSON_DeleteItemFromObjectCaseSensitive(object, "final");
+            cJSON_DeleteItemFromObjectCaseSensitive(object, "measurement_id");
+            cJSON_DeleteItemFromObjectCaseSensitive(object, "shot_kind");
+            if (!cJSON_HasObjectItem(object, "shot_uuid"))
+                cJSON_AddStringToObject(object, "shot_uuid", peer->shot_uuid);
+            if (cJSON_HasObjectItem(object, "tee_position")) {
+                cJSON_DeleteItemFromObjectCaseSensitive(object, "tee_position");
+                cJSON_AddStringToObject(object, "ball_lie", "tee");
+            }
+        } else if (channel == 4) {
+            cJSON_ReplaceItemInObjectCaseSensitive(object, "type", cJSON_CreateString("device_status"));
+            cJSON_AddStringToObject(object, "capture_mode", "full");
+        } else if (channel == 6) {
+            cJSON_ReplaceItemInObjectCaseSensitive(object, "type", cJSON_CreateString("simulator_state"));
+            cJSON_DeleteItemFromObjectCaseSensitive(object, "mode");
+            cJSON_AddStringToObject(object, "requested_capture_mode", "full");
+        }
         char *converted = cJSON_PrintUnformatted(object);
         bool ok = converted && cgp_publish(peer,channel,converted);
         cJSON_free(converted); cJSON_Delete(object); return ok;
@@ -119,6 +146,10 @@ static void shot(cgp_peer *peer)
     if (peer->shot_number == UINT_MAX)
         return;
     n = ++peer->shot_number;
+    if (cgp_peer_draft(peer) == CGP_DRAFT_3) {
+        time_t utc = time(NULL);
+        if (!cgp_shot_uuid(utc > 0 ? (uint64_t)utc * 1000 : 0, peer->shot_uuid)) return;
+    }
     publish(peer, 4, "{\"type\":\"status\",\"ball_detected\":true}");
     publish(peer, 1, "{\"type\":\"shot\",\"shot_number\":%u,\"final\":true,"
             "\"measurement_id\":\"%08x%08x-%u\",\"player_dexterity\":\"right\","
@@ -190,20 +221,30 @@ void cgp_mock_receive(cgp_peer *peer, unsigned channel, const cJSON *message)
         return;
     type = cJSON_GetObjectItemCaseSensitive(message, "type");
     final = cJSON_GetObjectItemCaseSensitive(message, "final");
-    n = cJSON_GetObjectItemCaseSensitive(message, "shot_number");
+    n = cJSON_GetObjectItemCaseSensitive(message,
+            cgp_peer_draft(peer) == CGP_DRAFT_3 ? "shot_uuid" : "shot_number");
     speed = cJSON_GetObjectItemCaseSensitive(message, "ball_speed_meters_per_second");
     angle = cJSON_GetObjectItemCaseSensitive(message, "horizontal_launch_angle_degrees");
     if (!cJSON_IsString(type) || strcmp(type->valuestring, "shot") ||
-        (final && !cJSON_IsTrue(final)) || !cJSON_IsNumber(n) ||
-        !isfinite(n->valuedouble) || n->valuedouble < 1 ||
-        n->valuedouble > UINT_MAX || floor(n->valuedouble) != n->valuedouble ||
+        (cgp_peer_draft(peer) != CGP_DRAFT_3 && ((final && !cJSON_IsTrue(final)) ||
+        !cJSON_IsNumber(n) || !isfinite(n->valuedouble) || n->valuedouble < 1 ||
+        n->valuedouble > UINT_MAX || floor(n->valuedouble) != n->valuedouble)) ||
         !cJSON_IsNumber(speed) || !isfinite(speed->valuedouble) || speed->valuedouble < 0 ||
         !cJSON_IsNumber(angle) || !isfinite(angle->valuedouble))
         return;
+    if (cgp_peer_draft(peer) == CGP_DRAFT_3) {
+        if (!cJSON_IsString(n) || strlen(n->valuestring) != 36 ||
+                n->valuestring[14] != '7' || !strchr("89ab", n->valuestring[19])) return;
+        for (unsigned i = 0; i < 36; ++i) {
+            bool separator = i == 8 || i == 13 || i == 18 || i == 23;
+            if (separator ? n->valuestring[i] != '-' : !strchr("0123456789abcdef", n->valuestring[i])) return;
+        }
+        memcpy(peer->shot_uuid, n->valuestring, 37);
+    }
     publish(peer, 7, "{\"type\":\"result\",\"shot_number\":%u,\"accepted\":true,"
             "\"carry_distance_meters\":%.1f,\"total_distance_meters\":%.1f,"
             "\"carry_side_meters\":%.1f,\"total_side_meters\":%.1f,\"max_height_meters\":%.1f}",
-            (unsigned)n->valuedouble, speed->valuedouble * 2.6, speed->valuedouble * 2.75,
+            cgp_peer_draft(peer) == CGP_DRAFT_3 ? 0 : (unsigned)n->valuedouble, speed->valuedouble * 2.6, speed->valuedouble * 2.75,
             angle->valuedouble * 2.0, angle->valuedouble * 2.2, speed->valuedouble * 0.4);
 }
 
@@ -229,7 +270,7 @@ static int demo_accept(cgp_peer *peer,uint32_t channel,void *user) {
 }
 cgp_engine *cgp_create(cgp_role role,const char *name,struct in_addr local_ip) {
 #ifndef CONFIG_CGP_DRAFT
-#define CONFIG_CGP_DRAFT 2
+#define CONFIG_CGP_DRAFT 3
 #endif
     cgp_options options={.role=role,.draft=CONFIG_CGP_DRAFT,.listener=role!=CGP_SIMULATOR,
         .name=name,.local_ip=local_ip,.callbacks={.connected=demo_connected,.tick=demo_tick,

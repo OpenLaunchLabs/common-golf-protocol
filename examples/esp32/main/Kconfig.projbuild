@@ -1,10 +1,10 @@
 menu "Common Golf Protocol demo"
     config CGP_DRAFT
         int "Protocol draft"
-        range 1 2
-        default 2
+        range 1 3
+        default 3
         help
-            Draft 1 (0.1.x) or draft 2 (0.2.0).
+            Draft 1 (0.1.x), draft 2 (0.2.0), or draft 3 (0.3.0).
             Every peer on a connection must use the same draft ALPN.
 
 

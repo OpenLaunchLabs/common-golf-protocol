@@ -51,6 +51,7 @@ static void release_channel(cgp_peer *p, cgp_stream *s) {
 static void free_stream(cgp_peer *p, cgp_stream *s) {
     release_channel(p, s);
     cgp_rx_free(&s->rx);
+    free(s->held);
     while (s->head) {
         cgp_buffer *b = s->head;
         s->head = b->next;
@@ -63,6 +64,7 @@ static void free_stream(cgp_peer *p, cgp_stream *s) {
 static void drop_peer(cgp_peer *p) {
     if (p->quic && p->notified && p->engine->callbacks.disconnected)
         p->engine->callbacks.disconnected(p, p->engine->user);
+    for(unsigned i=0;i<CGP_MAX_BINDINGS;++i)free(p->bindings[i].pending);
     if (p->quic) ngtcp2_conn_del(p->quic);
     if (p->tls) wolfSSL_free(p->tls);
     while (p->streams) {
@@ -75,29 +77,42 @@ static void drop_peer(cgp_peer *p) {
 
 static cgp_stream *channel_stream(cgp_peer *p, uint32_t channel, bool outgoing) {
     for (cgp_stream *s = p->streams; s; s = s->next) {
-        if (!s->assigned || s->channel != channel || (s->outgoing != outgoing && channel != 2) || s->stopped) continue;
+        if (!s->assigned || s->channel != channel || (s->outgoing != outgoing && !cgp_open_connect(p,channel)) || s->stopped) continue;
         /* The channel 2 responder still owes replies after the opener's FIN. */
-        if (!s->rx.ended || (outgoing && channel == 2 && !s->outgoing)) return s;
+        if (!s->rx.ended || (outgoing && cgp_open_connect(p,channel) && !s->outgoing)) return s;
     }
     return NULL;
 }
 
-bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
+/* ngtcp2 can reject another write after STOP_SENDING while it still waits
+ * for the RESET_STREAM ACK. Only stream_closed reveals the application code.
+ * Pause this channel until then; a write error alone is not a code-1 refusal. */
+static bool awaiting_channel_close(const cgp_peer *p,uint32_t channel) {
+    for(const cgp_stream *s=p->streams;s;s=s->next)
+        if(s->assigned && s->channel==channel && s->awaiting_close &&
+           (s->outgoing || cgp_open_connect(p,channel)))return true;
+    return false;
+}
+
+static bool publish_json(cgp_peer *p, unsigned channel, const char *json) {
     if (!p || !json || !p->ready || p->failed || (channel >= 9 && channel < 1000)) return false;
     cgp_binding *binding = cgp_find_binding(p,channel);
-    if (channel >= 1000 && !binding) return false;
+    if (p->engine->draft==CGP_DRAFT_3 && channel==2) return false;
+    if (channel >= 1000 && (!binding || binding->kind!=CGP_PRIVATE_JSON || binding->declined || !cgp_custom_ready(p))) return false;
     bool sim = p->engine->role == CGP_SIMULATOR;
     if (channel && !p->info_sent) return false;
     if (channel < 1000 && channel != 0 && channel != 2 &&
         (sim ? !(channel == 6 || channel == 7) : (channel == 6 || channel == 7))) return false;
     if (p->engine->role == CGP_CONTROL_BOX && channel != 0 && channel != 5 && channel < 1000) return false;
-    if (channel < CGP_CHANNELS && p->tx[channel] == -2) return false;
+    if ((channel < CGP_CHANNELS && p->tx[channel] == -2) || awaiting_channel_close(p,channel)) return false;
     size_t length = strlen(json);
     if (length > CGP_MAX_MESSAGE_BYTES || !cgp_json_valid(json, length)) return false;
+    if(p->engine->draft==CGP_DRAFT_3 && (channel==1||channel==3||channel==7||channel==8||cgp_open_connect(p,channel)) &&
+       !cgp_uuid_json_valid(json,length,channel==1||channel==7||channel==8))return false;
     cgp_stream *s = channel_stream(p, channel, true);
     if (s && s->fin_requested) return false;
     bool opening = !s;
-    if (opening && (channel == 2 && sim)) return false; /* device opens compatibility */
+    if (opening && (cgp_open_connect(p,channel) && sim)) return false; /* device opens compatibility */
     size_t bytes = length + 4 + (opening ? 4 : 0);
     if (!can_queue(p,bytes)) { ++p->suppressed_messages; return false; }
     if (opening && stream_table_full(p)) return false;
@@ -105,7 +120,7 @@ bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
     if (!b) { ++p->suppressed_messages; return false; }
     if (opening) {
         int64_t sid;
-        int rc = (channel == 2) ? ngtcp2_conn_open_bidi_stream(p->quic, &sid, NULL)
+        int rc = cgp_open_connect(p,channel) ? ngtcp2_conn_open_bidi_stream(p->quic, &sid, NULL)
                               : ngtcp2_conn_open_uni_stream(p->quic, &sid, NULL);
         if (rc) { free(b); return false; }
         s = new_stream(p, sid);
@@ -113,7 +128,7 @@ bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
         s->outgoing = true;
         s->channel = channel;s->assigned=true;
         if (channel < CGP_CHANNELS) p->tx[channel] = sid;
-        if (channel == 2) { s->rx.channel = channel; s->rx.has_channel = true; }
+        if (cgp_open_connect(p,channel)) { s->rx.channel = channel; s->rx.has_channel = true; }
     }
     *b = (cgp_buffer){.offset = s->next_offset, .length = bytes};
     size_t prefix = opening ? 4 : 0;
@@ -128,6 +143,19 @@ bool cgp_publish(cgp_peer *p, unsigned channel, const char *json) {
     ++p->sent_messages;
     if (!channel) p->info_sent = true;
     return true;
+}
+
+bool cgp_publish(cgp_peer *p,unsigned channel,const char *json) {
+    if(!p || !json)return false;
+    if(channel || p->engine->draft!=CGP_DRAFT_3)return publish_json(p,channel,json);
+    if(!cgp_json_valid(json,strlen(json)))return false;
+    char *info=cgp_menu_info(p,json);if(!info)return false;
+    bool sent=publish_json(p,0,info);free(info);
+    if(sent && p->engine->listener && !p->menu_seen) {
+        p->menu_seen=p->menu_valid=true;
+        if(p->engine->callbacks.menu)p->engine->callbacks.menu(p,true,p->engine->user);
+    }
+    return sent;
 }
 
 bool cgp_finish_channel(cgp_peer *p, uint32_t channel) {
@@ -146,6 +174,15 @@ bool cgp_close_channel(cgp_peer *p, uint32_t channel) {
     return true;
 }
 
+static unsigned raw_streams(cgp_peer *p) {
+    unsigned count=0;
+    for (cgp_stream *s=p->streams;s;s=s->next) {
+        cgp_binding *b=cgp_find_binding(p,s->channel);
+        if (s->assigned && b && (b->kind & CGP_PRIVATE_RAW) && !s->stopped && !(s->rx.ended && (s->id&2)) && !(s->fin_sent && s->rx.ended)) ++count;
+    }
+    return count;
+}
+
 typedef struct { cgp_peer *peer; cgp_stream *stream; } receive_context;
 
 static int accept_channel(void *user, uint32_t ch) {
@@ -156,8 +193,13 @@ static int accept_channel(void *user, uint32_t ch) {
     bool reads = ch == 0 || ch >= 1000 || (sim ? (ch == 1 || ch == 2 || ch == 3 || ch == 4 || ch == 5 || ch == 8)
                                  : (ch == 6 || ch == 7));
     cgp_binding *binding = cgp_find_binding(p,ch);
-    if (ch >= 1000 && !binding) return 1;
-    if (!reads || (ch < 1000 && ((ch == 2) == !!(s->id & 2))) || channel_stream(p, ch, false)) return 1;
+    if(p->engine->draft==CGP_DRAFT_3 && ch==2)return 1;
+    if(ch>=1000 && (!binding || binding->kind>CGP_PRIVATE_RAW_DATAGRAM || binding->kind==CGP_PRIVATE_DATAGRAM || !cgp_custom_ready(p)))return 1;
+    bool raw=binding && (binding->kind & CGP_PRIVATE_RAW);
+    bool open_connect=cgp_open_connect(p,ch);
+    if(open_connect && (!sim || (s->id&2)))return 1;
+    if(!reads || (ch<1000 && ((ch==2)==!!(s->id&2))) || (!raw && channel_stream(p,ch,false)))return 1;
+    if(raw && raw_streams(p)>=CGP_MAX_RAW_STREAMS)return 1;
     if (p->engine->callbacks.accept_channel && p->engine->callbacks.accept_channel(p,ch,p->engine->user)) return 1;
     s->channel = ch;s->assigned=true;
     if (ch < CGP_CHANNELS) p->rx[ch] = s->id;
@@ -168,6 +210,9 @@ static int receive_json(void *user, uint32_t ch, const char *body, size_t length
     receive_context *r = user;
     cgp_peer *p = r->peer;
     if (length > CGP_MAX_MESSAGE_BYTES || !cgp_json_valid(body, length)) return 2;
+    if(p->engine->draft==CGP_DRAFT_3 && (ch==1||ch==3||ch==7||ch==8||cgp_open_connect(p,ch)) &&
+       !cgp_uuid_json_valid(body,length,ch==1||ch==7||ch==8))return CGP_MALFORMED;
+    if(ch==0 && !cgp_menu_receive(p,body,length))return 2;
     ++p->received_messages;
     /* Start the application before dispatch if a peer stream races handshake callbacks. */
     if (!p->notified && p->ready) {
@@ -196,18 +241,41 @@ static int receive_stream(ngtcp2_conn *conn, uint32_t flags, int64_t id,
         p->notified = true;
         if (p->engine->callbacks.connected) p->engine->callbacks.connected(p,cgp_peer_identity(p),p->engine->user);
     }
-    int rc = cgp_rx_feed(&s->rx, data, length, fin, accept_channel, receive_json, &context);
+    size_t credit=s->replaying ? 0 : length;
+    uint8_t *combined=NULL;
+    if(p->engine->draft==CGP_DRAFT_3 && !p->engine->listener && (s->pending_menu || !p->menu_seen) && !s->rx.has_channel) {
+        if(s->held_length+length>4096)return NGTCP2_ERR_CALLBACK_FAILURE;
+        uint8_t *held=realloc(s->held,s->held_length+length);
+        if(!held && length)return NGTCP2_ERR_CALLBACK_FAILURE;
+        s->held=held;if(length)memcpy(held+s->held_length,data,length);s->held_length+=length;fin=fin||s->held_fin;s->held_fin=fin;
+        uint32_t channel=s->held_length>=4 ? ((uint32_t)held[0]<<24)|((uint32_t)held[1]<<16)|((uint32_t)held[2]<<8)|held[3] : UINT32_MAX;
+        if(!p->menu_seen && ((s->held_length<4 && !fin) || channel>=1000)) {
+            s->pending_menu=true;ngtcp2_conn_extend_max_offset(conn,credit);return 0;
+        }
+        combined=s->held;data=combined;length=s->held_length;s->held=NULL;s->held_length=0;s->pending_menu=false;
+    }
+    size_t remaining=length;const uint8_t *at=data;int rc=s->rx.status;
+    if(!rc && !s->rx.has_channel) {
+        size_t n=4-s->rx.header_used;if(n>remaining)n=remaining;
+        rc=cgp_rx_feed(&s->rx,at,n,false,accept_channel,receive_json,&context);at+=n;remaining-=n;
+    }
+    cgp_binding *binding=cgp_find_binding(p,s->channel);
+    if(!rc && s->rx.has_channel && binding && (binding->kind & CGP_PRIVATE_RAW)) {
+        if(p->engine->callbacks.raw_stream)p->engine->callbacks.raw_stream(p,s->id,s->channel,at,remaining,fin,p->engine->user);
+        if(fin)s->rx.ended=true;
+    } else if(!rc)rc=cgp_rx_feed(&s->rx,at,remaining,fin,accept_channel,receive_json,&context);
+    free(combined);
     if (rc < 0) return NGTCP2_ERR_CALLBACK_FAILURE;
     /* Return consumed credit even for discarded streams. */
-    ngtcp2_conn_extend_max_offset(conn, length);
-    if (!rc && ngtcp2_conn_extend_max_stream_offset(conn, id, length))
+    ngtcp2_conn_extend_max_offset(conn, credit);
+    if (!rc && !s->transport_closed && ngtcp2_conn_extend_max_stream_offset(conn, id, length))
         return NGTCP2_ERR_CALLBACK_FAILURE;
     if (rc && !s->stopped) {
         s->stopped = true;
         cgp_log("STOP peer=%s stream=%" PRId64 " code=%d", p->name, id, rc);
         /* Declined bidirectional compatibility streams also need their unused
          * local write half closed, or their stream slot can never be reclaimed. */
-        int shutdown = !fin ? ngtcp2_conn_shutdown_stream(conn, 0, id, (uint64_t)rc)
+        int shutdown = s->transport_closed ? 0 : !fin ? ngtcp2_conn_shutdown_stream(conn, 0, id, (uint64_t)rc)
             : !(id & 2) ? ngtcp2_conn_shutdown_stream_write(conn, 0, id, (uint64_t)rc) : 0;
         if (shutdown) return NGTCP2_ERR_CALLBACK_FAILURE;
     }
@@ -230,14 +298,19 @@ static int stream_closed(ngtcp2_conn *conn, uint32_t flags, int64_t id,
     while (*link && (*link)->id != id) link = &(*link)->next;
     if (*link) {
         cgp_stream *s = *link;
+        if(s->pending_menu) {s->transport_closed=true;goto released;}
         *link = s->next;
+        cgp_binding *binding=cgp_find_binding(p,s->channel);
+        if(binding && code==CGP_NOT_INTERESTED && s->outgoing)binding->declined=true;
+        if(binding && (binding->kind&CGP_PRIVATE_RAW) && p->engine->callbacks.raw_closed)p->engine->callbacks.raw_closed(p,s->id,p->engine->user);
         if (s->outgoing) {
             if (s->channel < CGP_CHANNELS && p->tx[s->channel] == s->id)
-                p->tx[s->channel] = (flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET) && code ? -2 : -1;
+                p->tx[s->channel] = (flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET) && (p->engine->draft==CGP_DRAFT_3 ? code==CGP_NOT_INTERESTED : code!=0) ? -2 : -1;
             cgp_log("channel closed peer=%s channel=%u code=%" PRIu64, p->name, s->channel, code);
         }
         free_stream(p, s);
     }
+released:;
     /* One replacement slot for each incoming stream, including streams
      * refused because the table was full and never tracked. */
     bool local_client = !p->engine->listener;
@@ -250,10 +323,14 @@ static int stream_closed(ngtcp2_conn *conn, uint32_t flags, int64_t id,
 
 static int stream_reset(ngtcp2_conn *conn, int64_t id, uint64_t final_size,
                         uint64_t code, void *user, void *stream_user) {
-    (void)conn; (void)final_size; (void)code; (void)stream_user;
+    (void)conn; (void)final_size; (void)stream_user;
     cgp_peer *p = user;
     cgp_stream *s = find_stream(p, id);
     if (s) {
+        cgp_binding *binding=cgp_find_binding(p,s->channel);
+        if(binding && (binding->kind&CGP_PRIVATE_RAW)) {
+            s->stopped=true;if(!(id&2))ngtcp2_conn_shutdown_stream_write(conn,0,id,code);
+        }
         release_channel(p, s);
         cgp_rx_free(&s->rx);
         s->rx.status = 1;s->rx.ended=true;
@@ -290,6 +367,15 @@ static int handshake_done(ngtcp2_conn *conn, void *user) {
     }
     char fingerprint[65];
     int identity = cgp_peer_fingerprint(p->tls, fingerprint);
+    if(p->engine->draft==CGP_DRAFT_3) {
+        int client_type=-1,server_type=-1;
+        if(wolfSSL_get_negotiated_client_cert_type(p->tls,&client_type)!=WOLFSSL_SUCCESS ||
+           wolfSSL_get_negotiated_server_cert_type(p->tls,&server_type)!=WOLFSSL_SUCCESS ||
+           client_type!=WOLFSSL_CERT_TYPE_RPK || server_type!=WOLFSSL_CERT_TYPE_RPK || identity!=0 ||
+           (!p->engine->listener && strcmp(p->expected_key,fingerprint)))return NGTCP2_ERR_CALLBACK_FAILURE;
+        const ngtcp2_transport_params *params=ngtcp2_conn_get_remote_transport_params(conn);
+        if(!params || params->max_datagram_frame_size<1200)return NGTCP2_ERR_CALLBACK_FAILURE;
+    }
     if (identity < 0 || (identity == 1 && !p->engine->listener)) {
         cgp_log("peer=%s invalid or missing Ed25519 listener identity", p->name);
         return NGTCP2_ERR_CALLBACK_FAILURE;
@@ -302,6 +388,97 @@ static int handshake_done(ngtcp2_conn *conn, void *user) {
     cgp_log("CONNECTED peer=%s fingerprint=%s tier=%s handshake_ms=%" PRIu64,
             p->name, identity == 0 ? fingerprint : "none", p->tier, (cgp_now_ns() - p->created) / 1000000);
     return 0;
+}
+
+static int receive_datagram(ngtcp2_conn *conn, uint32_t flags, const uint8_t *data, size_t length, void *user) {
+    (void)conn; (void)flags;
+    cgp_peer *p=user;
+    if (p->engine->draft != CGP_DRAFT_3 || length < 12) return 0;
+    if (!p->notified && p->ready) {
+        p->notified=true;
+        if (p->engine->callbacks.connected) p->engine->callbacks.connected(p,cgp_peer_identity(p),p->engine->user);
+    }
+    uint32_t channel=((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3];
+    cgp_binding *b=cgp_find_binding(p,channel);
+    if (!b || b->kind>CGP_PRIVATE_RAW_DATAGRAM || !cgp_custom_ready(p) || !(b->kind & CGP_PRIVATE_DATAGRAM)) return 0;
+    if(p->engine->callbacks.accept_channel && p->engine->callbacks.accept_channel(p,channel,p->engine->user))return 0;
+    uint64_t seq=0;
+    for (unsigned i=4;i<12;++i) seq=(seq<<8)|data[i];
+    if (p->engine->callbacks.datagram) p->engine->callbacks.datagram(p,channel,seq,data+12,length-12,p->engine->user);
+    return 0;
+}
+
+size_t cgp_max_datagram_payload(const cgp_peer *p) {
+    if (!p || !p->quic || !p->ready || p->engine->draft != CGP_DRAFT_3) return 0;
+    const ngtcp2_transport_params *params=ngtcp2_conn_get_remote_transport_params(p->quic);
+    if (!params || params->max_datagram_frame_size < 15) return 0;
+    /* Conservative budget for the 1200-byte path, AEAD/tag, packet and frame headers. */
+    size_t size=params->max_datagram_frame_size-15;
+    size_t path=ngtcp2_conn_get_path_max_tx_udp_payload_size(p->quic);
+    size_t payload=path>100 ? path-100 : 0;
+    if(payload>1100)payload=1100;
+    return size<payload ? size : payload;
+}
+bool cgp_send_datagram(cgp_peer *p, uint32_t channel, const uint8_t *data, size_t length) {
+    cgp_binding *b=p ? cgp_find_binding(p,channel) : NULL;
+    if (!b || b->kind>CGP_PRIVATE_RAW_DATAGRAM || !cgp_custom_ready(p) || !(b->kind & CGP_PRIVATE_DATAGRAM) || p->failed || b->declined || awaiting_channel_close(p,channel) || !p->info_sent || !cgp_custom_ready(p) || b->pending || b->exhausted ||
+        !cgp_max_datagram_payload(p) || length > cgp_max_datagram_payload(p) || (!data && length)) return false;
+    b->pending=malloc(length+12);
+    if (!b->pending) return false;
+    b->pending_length=length+12;
+    cgp_write_u32(b->pending,channel);
+    for (unsigned i=0;i<8;++i) b->pending[4+i]=(uint8_t)(b->sequence >> (56-i*8));
+    if (length) memcpy(b->pending+12,data,length);
+    if (b->sequence==UINT64_MAX) b->exhausted=true; else ++b->sequence;
+    return true;
+}
+int64_t cgp_open_raw(cgp_peer *p, uint32_t channel, bool bidirectional) {
+    cgp_binding *binding=p ? cgp_find_binding(p,channel) : NULL;
+    if (!binding || binding->kind>CGP_PRIVATE_RAW_DATAGRAM || binding->declined || !(binding->kind & CGP_PRIVATE_RAW) || !p->ready || p->failed || !p->info_sent ||
+        !cgp_custom_ready(p) || awaiting_channel_close(p,channel) || raw_streams(p)>=CGP_MAX_RAW_STREAMS || !can_queue(p,4)) return -1;
+    cgp_buffer *b=malloc(sizeof(*b)+4);
+    if (!b) return -1;
+    int64_t id;
+    int rc=bidirectional ? ngtcp2_conn_open_bidi_stream(p->quic,&id,NULL) : ngtcp2_conn_open_uni_stream(p->quic,&id,NULL);
+    if (rc) { free(b); return -1; }
+    cgp_stream *s=new_stream(p,id);
+    if (!s) { free(b); ngtcp2_conn_shutdown_stream_write(p->quic,0,id,CGP_NOT_INTERESTED);return -1; }
+    s->outgoing=true;s->channel=channel;s->assigned=true;
+    if (bidirectional) {s->rx.has_channel=true;s->rx.channel=channel;}
+    *b=(cgp_buffer){.length=4};cgp_write_u32(b->bytes,channel);
+    s->head=s->tail=b;s->next_offset=4;p->queued+=sizeof(*b)+4;
+    return id;
+}
+bool cgp_send_raw_on_stream(cgp_peer *p,int64_t id,const uint8_t *data,size_t length) {
+    cgp_stream *s=p ? find_stream(p,id) : NULL;
+    cgp_binding *binding=s ? cgp_find_binding(p,s->channel) : NULL;
+    if (!binding || binding->kind>CGP_PRIVATE_RAW_DATAGRAM || binding->declined || !(binding->kind & CGP_PRIVATE_RAW) || (!s->outgoing && (id&2)) || s->stopped || s->fin_requested ||
+        !p->ready || p->failed || !p->info_sent || !cgp_custom_ready(p) || awaiting_channel_close(p,s->channel) || (!data && length) || (length && !can_queue(p,length))) return false;
+    if (!length) return true;
+    cgp_buffer *b=malloc(sizeof(*b)+length);
+    if (!b) return false;
+    *b=(cgp_buffer){.offset=s->next_offset,.length=length};
+    if (length) memcpy(b->bytes,data,length);
+    if (s->tail) s->tail->next=b; else s->head=b;
+    s->tail=b;s->next_offset+=length;p->queued+=sizeof(*b)+length;return true;
+}
+bool cgp_send_raw(cgp_peer *p,uint32_t channel,const uint8_t *data,size_t length) {
+    if (!p || (!data && length) || (length && !can_queue(p,length))) return false;
+    cgp_stream *s=channel_stream(p,channel,true);
+    int64_t id=s ? s->id : cgp_open_raw(p,channel,false);
+    return id>=0 && cgp_send_raw_on_stream(p,id,data,length);
+}
+bool cgp_finish_stream(cgp_peer *p,int64_t id) {
+    cgp_stream *s=p ? find_stream(p,id) : NULL;
+    if (!s || s->stopped || (!s->outgoing && (id&2))) return false;
+    s->fin_requested=true;return true;
+}
+
+bool cgp_cancel_stream(cgp_peer *p,int64_t id) {
+    cgp_stream *s=p ? find_stream(p,id) : NULL;
+    if (!s || s->stopped) return false;
+    if (ngtcp2_conn_shutdown_stream(p->quic,0,id,0)) return false;
+    s->stopped=true;return true;
 }
 
 static void random_bytes(uint8_t *dest, size_t length, const ngtcp2_rand_ctx *ctx) {
@@ -344,6 +521,7 @@ static cgp_peer *new_peer(cgp_engine *e, const struct sockaddr_in *remote,
         .hp_mask = ngtcp2_crypto_hp_mask_cb,
         .recv_retry = ngtcp2_crypto_recv_retry_cb,
         .recv_stream_data = receive_stream,
+        .recv_datagram = receive_datagram,
         .stream_open = stream_opened,
         .stream_close = stream_closed,
         .stream_reset = stream_reset,
@@ -372,7 +550,8 @@ static cgp_peer *new_peer(cgp_engine *e, const struct sockaddr_in *remote,
     params.initial_max_data = 16384;
     params.initial_max_streams_uni = CGP_REMOTE_STREAMS_UNI;
     params.initial_max_streams_bidi = CGP_REMOTE_STREAMS_BIDI;
-    params.max_idle_timeout = 90 * NGTCP2_SECONDS;
+    params.max_idle_timeout = (e->draft==CGP_DRAFT_3 ? 30 : 90) * NGTCP2_SECONDS;
+    if(e->draft==CGP_DRAFT_3)params.max_datagram_frame_size=1200;
     params.max_udp_payload_size = 2048; /* Matches read_packets' receive buffer. */
     params.active_connection_id_limit = 2;
     params.disable_active_migration = 1;
@@ -407,7 +586,7 @@ static cgp_peer *new_peer(cgp_engine *e, const struct sockaddr_in *remote,
     if (initial) wolfSSL_set_accept_state(p->tls);
     else wolfSSL_set_connect_state(p->tls);
     ngtcp2_conn_set_tls_native_handle(p->quic, p->tls);
-    ngtcp2_conn_set_keep_alive_timeout(p->quic, 15 * NGTCP2_SECONDS);
+    ngtcp2_conn_set_keep_alive_timeout(p->quic, (e->draft==CGP_DRAFT_3 ? 5 : 15) * NGTCP2_SECONDS);
     cgp_log("CONNECTING peer=%s", p->name);
     return p;
 failure:
@@ -417,18 +596,20 @@ failure:
 }
 
 cgp_engine *cgp_create_options(const cgp_options *options) {
-    if (!options || !cgp_alpn(options->draft) || !options->name ||
+    if (!options || !options->name ||
         options->role < CGP_LAUNCH_MONITOR || options->role > CGP_SIMULATOR) return NULL;
+    cgp_draft draft=options->draft ? options->draft : CGP_DRAFT_3;
+    if(!cgp_alpn(draft))return NULL;
     cgp_engine *e = calloc(1, sizeof(*e));
     if (!e) return NULL;
     e->socket = -1;
     e->role = options->role;
-    e->draft = options->draft;
+    e->draft = draft;
     e->listener = options->listener;
     e->callbacks = options->callbacks;
     e->user = options->user;
     snprintf(e->name, sizeof(e->name), "%s", options->name);
-    e->tls = cgp_tls_context(options->listener, options->identity_directory, e->fingerprint);
+    e->tls = cgp_tls_context(options->listener, draft==CGP_DRAFT_3, options->identity_directory, e->fingerprint);
     if (!e->tls) goto failure;
     cgp_log("identity Ed25519=%s",e->fingerprint);
     e->socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -456,13 +637,19 @@ void cgp_destroy(cgp_engine *e) {
 uint16_t cgp_port(const cgp_engine *e) { return ntohs(e->local.sin_port); }
 
 bool cgp_connect(cgp_engine *e, const struct sockaddr_in *remote, const char *name) {
-    if (e->listener) return false;
+    if (e->draft==CGP_DRAFT_3)return false;
+    return cgp_connect_key(e,remote,name,NULL);
+}
+bool cgp_connect_key(cgp_engine *e,const struct sockaddr_in *remote,const char *name,const char *key) {
+    if(e->listener || (e->draft==CGP_DRAFT_3 && !cgp_key_valid(key)))return false;
     for (unsigned i = 0; i < CONFIG_CGP_MAX_CONNECTIONS; ++i) {
         cgp_peer *p = &e->peers[i];
         if (p->quic && p->remote.sin_addr.s_addr == remote->sin_addr.s_addr &&
             p->remote.sin_port == remote->sin_port) return true;
     }
-    return new_peer(e, remote, name, NULL) != NULL;
+    cgp_peer *p=new_peer(e,remote,name,NULL);
+    if(p && key)snprintf(p->expected_key,sizeof(p->expected_key),"%s",key);
+    return p!=NULL;
 }
 
 static bool cid_matches(cgp_peer *p, const ngtcp2_version_cid *cid) {
@@ -533,6 +720,34 @@ static void read_packets(cgp_engine *e) {
     }
 }
 
+static void write_one_datagram(cgp_peer *p) {
+    uint8_t packet[1200];
+    for (unsigned ntry=0;ntry<CGP_MAX_BINDINGS;++ntry) {
+        unsigned i=(p->datagram_cursor+ntry)%CGP_MAX_BINDINGS;
+        cgp_binding *b=&p->bindings[i];
+        if (!b->pending) continue;
+        ngtcp2_path_storage path; ngtcp2_path_storage_zero(&path);
+        ngtcp2_pkt_info info={0}; int accepted=0;
+        uint64_t now=cgp_now_ns();
+        ngtcp2_ssize n=b->pending_length-12>cgp_max_datagram_payload(p) ? NGTCP2_ERR_INVALID_ARGUMENT :
+            ngtcp2_conn_write_datagram(p->quic,&path.path,&info,packet,sizeof(packet),&accepted,0,0,b->pending,b->pending_length,now);
+        if (n>0) {
+            sendto(p->engine->socket,packet,(size_t)n,0,path.path.remote.addr,path.path.remote.addrlen);
+            ngtcp2_conn_update_pkt_tx_time(p->quic,now);
+        }
+        if (n<0) {
+            uint64_t sequence=0;
+            for(unsigned j=4;j<12;++j)sequence=(sequence<<8)|b->pending[j];
+            free(b->pending);b->pending=NULL;b->pending_length=0;
+            cgp_log("DATAGRAM_REJECTED peer=%s channel=%u sequence=%" PRIu64 " reason=%s",p->name,b->channel,sequence,ngtcp2_strerror((int)n));
+            if(p->engine->callbacks.datagram_error)
+                p->engine->callbacks.datagram_error(p,b->channel,sequence,(int)n,p->engine->user);
+            if(n!=NGTCP2_ERR_INVALID_ARGUMENT)fail_peer(p,(int)n);
+        } else if(accepted) {free(b->pending);b->pending=NULL;b->pending_length=0;}
+        p->datagram_cursor=(i+1)%CGP_MAX_BINDINGS;break;
+    }
+}
+
 static void write_packets(cgp_peer *p) {
     uint8_t packet[1200];
     cgp_stream *cursor = find_stream(p,p->write_cursor);
@@ -561,7 +776,7 @@ static void write_packets(cgp_peer *p) {
                 b ? b->bytes + b->sent : NULL, b ? b->length - b->sent : 0, now);
         if (length == NGTCP2_ERR_STREAM_SHUT_WR || length == NGTCP2_ERR_STREAM_NOT_FOUND) {
             s->stopped = true;
-            if (s->channel < CGP_CHANNELS) p->tx[s->channel] = -2;
+            s->awaiting_close = true;
             continue;
         }
         bool blocked = length == NGTCP2_ERR_STREAM_DATA_BLOCKED;
@@ -587,6 +802,7 @@ static void write_packets(cgp_peer *p) {
         ngtcp2_conn_update_pkt_tx_time(p->quic, now);
     }
     p->write_cursor=cursor ? cursor->id : -1;
+    if(!p->failed)write_one_datagram(p);
 
 }
 
@@ -604,6 +820,24 @@ void cgp_poll(cgp_engine *e) {
                 if (!p->notified) {
                     p->notified = true;
                     if (e->callbacks.connected) e->callbacks.connected(p,cgp_peer_identity(p),e->user);
+                }
+                if(p->menu_seen) {
+                    cgp_stream **link=&p->streams;
+                    while(*link) {
+                        cgp_stream *stream=*link;
+                        if(!stream->pending_menu){link=&stream->next;continue;}
+                        uint8_t *bytes=stream->held;size_t length=stream->held_length;bool fin=stream->held_fin;
+                        stream->held=NULL;stream->held_length=0;stream->pending_menu=false;stream->replaying=true;
+                        int rc=receive_stream(p->quic,fin ? NGTCP2_STREAM_DATA_FLAG_FIN : 0,stream->id,0,bytes,length,p,NULL);
+                        stream->replaying=false;free(bytes);
+                        if(stream->transport_closed){
+                            cgp_binding *binding=cgp_find_binding(p,stream->channel);
+                            if(binding && (binding->kind&CGP_PRIVATE_RAW) && e->callbacks.raw_closed)
+                                e->callbacks.raw_closed(p,stream->id,e->user);
+                            *link=stream->next;free_stream(p,stream);
+                        }else link=&stream->next;
+                        if(rc){fail_peer(p,rc);break;}
+                    }
                 }
                 if (e->callbacks.tick) e->callbacks.tick(p,e->user);
             }

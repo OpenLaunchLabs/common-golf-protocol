@@ -40,7 +40,7 @@ class Box(Connection):
 
 def main():
     arguments = argparse.ArgumentParser(description=__doc__)
-    arguments.add_argument("--draft", type=int, choices=(1, 2), default=2)
+    arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
     arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")

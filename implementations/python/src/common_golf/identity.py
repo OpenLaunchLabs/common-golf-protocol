@@ -54,11 +54,25 @@ class Identity:
         if actual != self.fingerprint:
             raise ValueError("identity key and certificate do not match")
 
-    def configuration(self, *, is_client, draft=Draft.TWO):
+    def configuration(self, *, is_client, draft=Draft.THREE, expected_key=None):
+        draft = Draft(draft)
+        if expected_key is not None:
+            validate_key(expected_key)
+        if draft == Draft.THREE and is_client and expected_key is None:
+            raise ValueError("draft 3 requires the advertised listener key")
         config = QuicConfiguration(is_client=is_client, alpn_protocols=[Draft(draft).alpn],
-                                   verify_mode=ssl.CERT_NONE, idle_timeout=90.0)
+                                   verify_mode=ssl.CERT_NONE, idle_timeout=30.0 if draft == Draft.THREE else 90.0,
+                                   max_datagram_frame_size=1200 if draft == Draft.THREE else None)
         config.load_cert_chain(self.cert_path, self.key_path)
+        config._cgp_expected_key = expected_key
         return config
+
+
+def validate_key(value):
+    import re
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError("discovery key must be 64 lowercase hexadecimal characters")
+    return value
 
 
 def tier_of(peer_fingerprint, trusted=None):

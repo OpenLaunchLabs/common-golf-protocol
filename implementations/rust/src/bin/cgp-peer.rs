@@ -1,6 +1,10 @@
 //! Diagnostic interop peer. Direct addresses here are test/support inputs, not a product UI.
 use anyhow::{bail, Context, Result};
-use common_golf_protocol::{identity::Identity, Draft, Peer, Role};
+use common_golf_protocol::{
+    custom::{Contract, Format},
+    identity::Identity,
+    Draft, Peer, Role,
+};
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -15,15 +19,16 @@ use std::{
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() % 2 != 0 {
-        bail!("usage: cgp-peer --draft 1|2 --role listen|connect --host HOST --port PORT --output FILE --identity DIR [--duration SECONDS] [--version VERSION]");
+        bail!("usage: cgp-peer [--draft 1|2|3 (default 3)] --role listen|connect --host HOST --port PORT --output FILE --identity DIR [--duration SECONDS] [--version VERSION]");
     }
     let args: HashMap<_, _> = args
         .chunks(2)
         .map(|p| (p[0].as_str(), p[1].as_str()))
         .collect();
-    let draft = match args.get("--draft").copied().unwrap_or("2") {
-        "1" => Draft::One,
-        "2" => Draft::Two,
+    let draft = match args.get("--draft").copied() {
+        Some("1") => Draft::One,
+        Some("2") => Draft::Two,
+        Some("3") | None => Draft::default(),
         _ => bail!("unsupported draft"),
     };
     let version = args
@@ -33,7 +38,7 @@ async fn main() -> Result<()> {
         .to_owned();
     if !matches!(
         (draft, version.as_str()),
-        (Draft::One, "0.1.0" | "0.1.1") | (Draft::Two, "0.2.0")
+        (Draft::One, "0.1.0" | "0.1.1") | (Draft::Two, "0.2.0") | (Draft::Three, "0.3.0")
     ) {
         bail!("version is not part of selected draft");
     }
@@ -83,10 +88,18 @@ async fn main() -> Result<()> {
                     name,
                     &format!("cgp-rust-{}.local.", std::process::id()),
                     endpoint.local_addr().unwrap().port(),
-                    HashMap::new(),
+                    if draft == Draft::Three {
+                        HashMap::from([
+                            ("key".into(), identity.fingerprint()),
+                            ("alpn".into(), "draft-3".into()),
+                        ])
+                    } else {
+                        HashMap::new()
+                    },
                 )
             })
             .transpose()?;
+        println!("KEY {}", identity.fingerprint());
         println!("READY {}", endpoint.local_addr()?.port());
         std::io::stdout().flush()?;
         let deadline = tokio::time::Instant::now() + duration;
@@ -101,7 +114,7 @@ async fn main() -> Result<()> {
                     let fixtures = fixtures.clone();
                     sessions.spawn(async move {
                         match incoming.await {
-                            Ok(connection) => exchange(connection, true, version, output, deadline, fixtures).await,
+                            Ok(connection) => exchange(connection, true, version, output, deadline, fixtures, None).await,
                             Err(error) => { eprintln!("handshake: {error}"); Ok(()) }
                         }
                     });
@@ -130,6 +143,7 @@ async fn main() -> Result<()> {
             output,
             tokio::time::Instant::now() + duration,
             fixtures,
+            args.get("--expected-key").map(|s| s.to_string()),
         )
         .await?;
         endpoint.close(0_u32.into(), b"done");
@@ -146,19 +160,49 @@ async fn exchange(
     output: Arc<Mutex<std::fs::File>>,
     deadline: tokio::time::Instant,
     fixtures: Option<serde_json::Value>,
+    expected_key: Option<String>,
 ) -> Result<()> {
     let role = if device {
         Role::DeviceController
     } else {
         Role::Simulator
     };
-    let private = HashSet::from([1000]);
-    let mut peer = Peer::new(connection, role, json!({"type":"info","protocol_version":version,"name":"Rust reference","channels":if device {vec![0,1,2,3,4,5,8]} else {vec![0,6,7]}}), private).await?;
+    let draft = connection
+        .handshake_data()
+        .and_then(|d| d.downcast::<noq::crypto::rustls::HandshakeData>().ok())
+        .and_then(|d| d.protocol.as_deref().and_then(Draft::from_alpn))
+        .context("missing ALPN")?;
+    let mut info = json!({"type":"info","protocol_version":version,"name":"Rust reference","channels":if device {vec![0,1,3,4,5,8]} else {vec![0,6,7]}});
+    let mut peer = if draft == Draft::Three {
+        if device {
+            info["contracts"] = json!([
+            {"channel":1000,"contract":"io.common-golf.interop-json-v1"},
+            {"channel":1001,"contract":"io.common-golf.interop-raw-v1"},
+            {"channel":1002,"contract":"io.common-golf.interop-datagram-v1"},
+            {"channel":1003,"contract":"io.common-golf.open-connect-v1"}]);
+        }
+        Peer::with_contracts(
+            connection,
+            role,
+            info,
+            vec![
+                Contract::new("io.common-golf.interop-json-v1", Format::Json),
+                Contract::new("io.common-golf.interop-raw-v1", Format::Raw),
+                Contract::new("io.common-golf.interop-datagram-v1", Format::Datagram),
+                Contract::open_connect(),
+            ],
+            expected_key.as_deref(),
+        )
+        .await?
+    } else {
+        Peer::new(connection, role, info, HashSet::from([1000])).await?
+    };
     let mut pending_custom = Vec::new();
     if let Some(fixtures) = fixtures {
         let draft_key = match peer.draft {
             Draft::One => "1",
             Draft::Two => "2",
+            Draft::Three => "3",
         };
         let records = fixtures["drafts"][draft_key][if device { "listen" } else { "connect" }]
             .as_array()
@@ -176,13 +220,25 @@ async fn exchange(
             let mut shot = json!({"type":"shot","shot_number":1,"ball_speed_meters_per_second":60.0,"vertical_launch_angle_degrees":12.0,"horizontal_launch_angle_degrees":-1.0,"final":true});
             match peer.draft {
                 Draft::One => shot["reduced_accuracy"] = json!(true),
-                Draft::Two => shot["estimated"] = json!(["ball_speed_meters_per_second"]),
+                Draft::Two | Draft::Three => {
+                    shot["estimated"] = json!(["ball_speed_meters_per_second"])
+                }
+            }
+            if peer.draft == Draft::Three {
+                shot.as_object_mut().unwrap().remove("shot_number");
+                shot.as_object_mut().unwrap().remove("final");
+                shot["shot_uuid"] = json!("017f22e2-79b0-7cc3-98c4-dc0c0c07398f");
             }
             peer.send(1, &shot).await?;
-            peer.send(3, &json!({"type":"club","shot_number":1,"club_speed_meters_per_second":40.0,"estimated":["club_speed_meters_per_second"]})).await?;
+            let club = if peer.draft == Draft::Three {
+                json!({"type":"club","shot_uuid":"017f22e2-79b0-7cc3-98c4-dc0c0c07398f","club_speed_meters_per_second":40.0,"estimated":["club_speed_meters_per_second"]})
+            } else {
+                json!({"type":"club","shot_number":1,"club_speed_meters_per_second":40.0,"estimated":["club_speed_meters_per_second"]})
+            };
+            peer.send(3, &club).await?;
             peer.send(
                 4,
-                &json!({"type":"status","ready":true,"battery_percent":90}),
+                &json!({"type":if peer.draft==Draft::Three {"device_status"}else{"status"},"ready":true,"battery_percent":90}),
             )
             .await?;
             peer.send(
@@ -192,15 +248,15 @@ async fn exchange(
             .await?;
             peer.send(
                 8,
-                &json!({"type":"flight","shot_number":1,"carry_distance_meters":210}),
+                &if peer.draft==Draft::Three {json!({"type":"flight","shot_uuid":"017f22e2-79b0-7cc3-98c4-dc0c0c07398f","carry_distance_meters":210})}else{json!({"type":"flight","shot_number":1,"carry_distance_meters":210})},
             )
             .await?;
             pending_custom.push((1000,json!({"type":"private","name":"io.common-golf.interop-json-v1","message":"opaque JSON ☃"})));
-            peer.send(2, &json!({"DeviceID":"Rust reference","Units":"Yards","ShotNumber":2,"APIversion":"1","BallData":{"Speed":130.0,"SpinAxis":0.0,"VLA":12.0,"HLA":-1.0},"ShotDataOptions":{"ContainsBallData":true,"ContainsClubData":false}})).await?;
+            peer.send(if peer.draft==Draft::Three {1003}else{2}, &json!({"DeviceID":"Rust reference","Units":"Yards","ShotNumber":2,"APIversion":"1","BallData":{"Speed":130.0,"SpinAxis":0.0,"VLA":12.0,"HLA":-1.0},"ShotDataOptions":{"ContainsBallData":true,"ContainsClubData":false}})).await?;
         } else {
-            peer.send(6, &json!({"type":"state","ready":true,"mode":"range"}))
+            peer.send(6, &json!({"type":if peer.draft==Draft::Three {"simulator_state"}else{"state"},"ready":true}))
                 .await?;
-            peer.send(7, &json!({"type":"result","shot_number":1,"accepted":true}))
+            peer.send(7, &if peer.draft==Draft::Three {json!({"type":"result","shot_uuid":"017f22e2-79b0-7cc3-98c4-dc0c0c07398f","accepted":true})}else{json!({"type":"result","shot_number":1,"accepted":true})})
                 .await?;
         }
     }
@@ -216,10 +272,33 @@ async fn exchange(
     for (channel, message) in pending_custom {
         peer.send(channel, &message).await?;
     }
+    if peer.draft == Draft::Three {
+        peer.wait_for_menu().await?;
+        let mut raw = peer.open_raw(1001, false).await?;
+        let output = raw.output.as_mut().unwrap();
+        output.write_all(&[0, 255, 128, 0, 97, 98, 99]).await?;
+        output.finish()?;
+        peer.send_datagram(1002, &[0, 255, 128, 0, 97, 98, 99])?;
+    }
+    let mut sample_tick = tokio::time::interval(Duration::from_millis(100));
+    let mut sample_count = 0;
     let mut count = 0;
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => break,
+            _ = sample_tick.tick(), if peer.draft==Draft::Three && sample_count<5 => {
+                peer.send_datagram(1002,&[0,255,128,0,97,98,99])?;sample_count+=1;
+            }
+            Some(mut raw) = peer.custom_streams.recv(), if peer.draft==Draft::Three => {
+                let payload=raw.input.as_mut().unwrap().read_to_end(65535).await?;
+                let mut file=output.lock().unwrap();writeln!(file,"{}",json!({"kind":"raw","channel":raw.channel,"payload_hex":common_golf_protocol::identity::hex(&payload)}))?;file.flush()?;
+            }
+            Some(datagram) = peer.datagrams.recv(), if peer.draft==Draft::Three => {
+                let mut file=output.lock().unwrap();writeln!(file,"{}",json!({"kind":"datagram","channel":datagram.channel,"sequence":datagram.sequence,"payload_hex":common_golf_protocol::identity::hex(&datagram.payload)}))?;file.flush()?;
+            }
+            Some(error) = peer.datagram_errors.recv(), if peer.draft==Draft::Three => {
+                bail!("datagram {}/{}: {}", error.channel, error.sequence, error.error);
+            }
             event = peer.incoming.recv() => {
                 let Some(event) = event else { break; };
                 {

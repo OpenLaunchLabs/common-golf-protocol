@@ -243,7 +243,7 @@ async fn runtime_delivers_json_without_schema_conformance() {
 
 #[tokio::test]
 async fn supported_drafts_exchange_private_json_and_open_connect_replies() {
-    for draft in Draft::SUPPORTED {
+    for draft in [Draft::One, Draft::Two] {
         let (_server, _client, device, sim) = connections(draft).await;
         let mut sender = Peer::new(
             device,

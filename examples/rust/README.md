@@ -1,6 +1,6 @@
 # Rust example
 
-A draft 2 launch monitor and simulator built on the
+A draft 3 launch monitor and simulator built on the
 [Rust crate](../../implementations/rust/README.md).
 
 ```sh
@@ -20,5 +20,7 @@ state, and returns a result for each shot.
 | `--identity DIR` | `.cgp-identities/rust-<role>` |
 | `--duration SECONDS` | `60` |
 
-Fingerprints are printed but not checked. For draft 1, fixtures, or direct
+The connector requires the discovered `key` and checks it against the listener's
+raw public key before sending channels. That discovery check does not establish
+product enrollment or user trust. For older drafts, fixtures, or direct
 addresses, use the crate's `cgp-peer`.

@@ -38,3 +38,8 @@ def cgp_host(native_build_dir):
 @pytest.fixture(scope="session")
 def mock_samples(native_build_dir):
     return require_executable(native_build_dir, "mock_samples")
+
+
+@pytest.fixture(scope="session")
+def cgp_host_draft2(native_build_dir):
+    return require_executable(native_build_dir, "cgp_host_draft2")
