@@ -1,7 +1,8 @@
 # Schemas
 
-The top-level files are the working schemas for draft 2 and match the
-[RFC](../rfc/0001-common-golf-protocol.md). Frozen copies:
+The top-level files track the unreleased draft-3 discussion in the
+[RFC](../rfc/0001-common-golf-protocol.md). They are not published draft-2
+schemas. Frozen copies remain unchanged:
 
 - `draft-1/`: 0.1.0 and 0.1.1 (identical), ALPN `common-golf/draft-1`. Uses
   `shot.reduced_accuracy`.
@@ -17,3 +18,10 @@ present numeric fields, and a zero total spin having a zero spin axis.
 
 Schemas cover message shape only. Stream direction, channel ownership,
 framing, and identity are covered by the implementation tests.
+
+The working `shot`, `club`, `result`, and `flight` schemas use canonical
+UUIDv7 `shot_uuid` identities. Explicit length and pattern constraints enforce
+the UUID spelling and version even without a format checker. `measured_at`
+is a separate optional UTC RFC3339 measurement time; it is not inferred from
+the UUID. Whole snapshots replace earlier snapshots for the same UUID and
+channel when a receiver accepts updates. There is no `final` field.

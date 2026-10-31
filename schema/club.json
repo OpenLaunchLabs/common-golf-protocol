@@ -5,8 +5,14 @@
   "required": ["type"],
   "properties": {
     "type": {"const": "club"},
-    "shot_number": {"type": "integer", "minimum": 1},
-    "swing_number": {"type": "integer", "minimum": 1},
+    "shot_uuid": {
+      "type": "string",
+      "format": "uuid",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 in lowercase hyphenated form. Identifies the same shot across channels, updates, and reconnects; independent of measured_at. A standalone swing may have its own shot_uuid."
+    },
     "club_speed_meters_per_second": {"type": "number", "minimum": 0},
     "angle_of_attack_degrees": {"type": "number"},
     "club_path_degrees": {"type": "number"},
@@ -33,7 +39,6 @@
       "description": "Numeric fields the device could not measure for this shot, or believes to have reduced accuracy. A sender MUST name only fields present in the message. A receiver ignores any other name",
       "items": {"type": "string"}
     },
-    "player_dexterity": {"enum": ["right", "left", "unknown"]},
-    "final": {"type": "boolean"}
+    "player_dexterity": {"enum": ["right", "left", "unknown"]}
   }
 }
