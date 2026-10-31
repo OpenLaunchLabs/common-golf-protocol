@@ -25,3 +25,11 @@ the UUID spelling and version even without a format checker. `measured_at`
 is a separate optional UTC RFC3339 measurement time; it is not inferred from
 the UUID. Whole snapshots replace earlier snapshots for the same UUID and
 channel when a receiver accepts updates. There is no `final` field.
+
+`open_connect.json` now describes the custom contract
+`io.common-golf.open-connect-v1`, not channel 2. Its optional `shot_uuid`
+extends request bodies only; replies remain unchanged. The listener's first
+`info.contracts` fixes custom numbers for the connection. Schema validation
+covers entry shape, identifier syntax, and bounds; runtime validation also
+checks unique channel numbers, decimal-integer wire notation, endpoint role,
+and menu immutability. `reads` and `reads_contracts` are optional hints.

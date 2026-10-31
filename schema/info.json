@@ -2,15 +2,95 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Common Golf Protocol channel 0: info",
   "type": "object",
-  "required": ["type", "protocol_version"],
+  "required": [
+    "type",
+    "protocol_version"
+  ],
   "properties": {
-    "type": {"const": "info"},
-    "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-    "name": {"type": "string"},
-    "vendor": {"type": "string"},
-    "model": {"type": "string"},
-    "serial": {"type": "string"},
-    "firmware_version": {"type": "string"},
-    "channels": {"type": "array", "items": {"type": "integer", "minimum": 0}}
+    "type": {
+      "const": "info"
+    },
+    "protocol_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "vendor": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "serial": {
+      "type": "string"
+    },
+    "firmware_version": {
+      "type": "string"
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "reads": {
+      "type": "array",
+      "items": {
+        "enum": [
+          0,
+          1,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ]
+      },
+      "description": "Optional standard-channel read capability hint; not a startup prerequisite."
+    },
+    "contracts": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": [
+          "channel",
+          "contract"
+        ],
+        "properties": {
+          "channel": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 4294967295
+          },
+          "contract": {
+            "$ref": "#/$defs/contract_identifier"
+          }
+        }
+      },
+      "description": "Immutable listener menu. Protocol validation also rejects duplicate channels and non-integer JSON notation (fractions or exponents)."
+    },
+    "reads_contracts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/contract_identifier"
+      },
+      "description": "Optional unordered exact custom-contract read capability hint; assigns no channels."
+    }
+  },
+  "$defs": {
+    "contract_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9._-]+$",
+      "not": {
+        "pattern": "[^a-z0-9._-]"
+      }
+    }
   }
 }

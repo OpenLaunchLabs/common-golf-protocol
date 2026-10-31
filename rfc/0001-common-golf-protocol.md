@@ -208,8 +208,8 @@ onto the wire. CGP's binary headers have a byte order; its JSON numbers do
 not.
 
 Every channel definition states its maximum message size, and a receiver
-MUST accept any message up to that size on that channel. Channels 0 to 8
-are small JSON objects and their maximum is 65,535 bytes. This is the
+MUST accept any message up to that size on that channel. Channels 0, 1, and
+3 to 8 are small JSON objects and their maximum is 65,535 bytes. This is the
 DNS-over-QUIC rule (RFC 9250, section 4.6): one fixed number, nothing
 negotiated. Private channels choose their own. A future channel carrying
 images or video would state its own ceiling, and would likely be a byte
@@ -226,9 +226,11 @@ is malformed. The receiver MUST
 discard the rest of that stream, MUST send STOP_SENDING with application
 error code 2 if the stream is still open (a stream that already ended with
 FIN cannot be stopped, so it is simply discarded), and MUST keep the
-connection open. The sender MAY reopen the channel on a new stream.
+connection open. The sender MAY reopen the channel on a new stream unless
+it has been declined with code 1 on this connection (section 3.9).
 
-Datagrams are not used in this version.
+Standard channels use reliable streams. Custom contracts may use raw
+streams or datagrams under section 6 and the draft-3 profile.
 
 ### 3.5 Declining a channel
 
@@ -236,19 +238,21 @@ A receiver that does not read a channel MUST send STOP_SENDING with
 application error code 1 on that stream. Simply never reading it is not
 allowed: unread bytes hold connection-level flow-control credit (RFC 9000,
 section 4) and would eventually stall the channels the receiver does want.
-The sender MUST treat code 1 as "not interested" and MUST NOT treat it as
-an error or close the connection.
+The sender MUST treat code 1 as "not on this connection" and MUST NOT
+reopen that channel on this connection, treat the decline as an error, or
+close the connection. Section 3.9 defines the lifecycle rules, including
+the temporary wait for a custom-channel menu; that wait is not a decline.
 
 A stream for a channel the opener does not own (section 5), or a second
 stream for a channel the opener already has open, is declined the same way.
 
 | Code | Name | Sent as | Meaning |
 |---|---|---|---|
-| 1 | `not_interested` | STOP_SENDING | I do not read this channel, or you may not open it |
-| 2 | `malformed` | STOP_SENDING | Bad length, not one JSON object, a number outside the double range, or FIN inside a frame |
+| 1 | `not_interested` | STOP_SENDING | Do not open this channel again on this connection |
+| 2 | `malformed` | STOP_SENDING | Bad length, not one JSON object, or FIN inside a frame |
 
-No other codes are defined. Nothing closes the connection except the
-transport itself.
+No other codes are defined. These stream errors do not close the
+connection; the identity check in section 4 can require closing it.
 
 ### 3.6 Keeping the connection up
 
@@ -273,16 +277,21 @@ QUIC orders bytes within a stream and not across streams (RFC 9000,
 section 2). The rules below exist because of that.
 
 - Each side MUST send its `info` (channel 0) before opening any other
-  stream. A receiver MUST still accept messages that arrive before `info`,
-  because the network may reorder streams. `info` is informational; nothing
-  waits on it.
+  stream. A receiver MUST still accept standard-channel messages that arrive
+  before `info`, because the network may reorder streams. Standard channels
+  do not wait for the peer's `info`. Custom channels use the listener's menu
+  under the lifecycle rules in section 3.9.
 - One stream per channel per direction per connection. A second stream
   for a channel that is already open is declined with code 1.
 - After a stream ends, by FIN or reset, the sender MAY reopen the channel
-  on a new stream. Reopening does not change shot identities: messages
-  about the same shot retain its `shot_uuid`. A new shot gets a new UUIDv7.
-- On the two-way channel 2 only the opener writes the channel prefix. The
-  responder writes framed messages on the same stream and nothing else.
+  on a new stream unless it has received code 1 for that channel on this
+  connection (section 3.9). Code 2 still permits reopening. Reopening does
+  not change shot identities: a message about the same shot retains its
+  `shot_uuid`, and a new shot gets a new
+  UUIDv7. The same-channel replacement rules in section 5 still apply.
+- On a two-way custom stream only the opener writes the channel prefix.
+  The responder writes on the same stream in the contract's format, without
+  a second channel prefix.
 
 ### 3.8 Versions
 
@@ -306,7 +315,7 @@ or a channel does not move it. Every string so far, and why it moved:
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
 | `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
-| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, new connection timers, and UUIDv7 whole-snapshot shot identity without `final` |
+| `common-golf/draft-3` | 0.3.0 (proposed) | Unreleased | Discussion: mandatory mutual raw public keys, required discovery key, no SNI dependence, new connection timers, UUIDv7 whole-snapshot shot identity without `final`, and listener-menu custom channels replacing channel 2 |
 
 At 1.0 the string becomes `common-golf/1`. From then on every change under
 that string is additive: new optional fields, new channels. The rules that
@@ -316,6 +325,48 @@ without any further negotiation. A change that cannot be additive gets
 
 `protocol_version` in `info` is for people and logs. Implementations MUST
 NOT make decisions on it; the ALPN already did.
+
+### 3.9 Connection lifecycle
+
+The connection follows this sequence. “Use” is ordinary channel traffic,
+not an additional exchange or a transition into a separate application
+“established” state.
+
+| Step | What happens |
+|---|---|
+| 1. QUIC handshake | ALPN picks one draft both sides offer (section 3.8). Both endpoints MUST present and authenticate Ed25519 raw public keys; X.509 and anonymous connectors are forbidden (section 3.3). |
+| 2. Identity | The listener maps the connector's authenticated key to a tier. The connector MUST match the required advertised listener key to the handshake key or close before opening any channel (section 4). |
+| 3. `info`, both ways | Each side's first stream is channel 0. The listener's first `info` carries the menu offered to that tier. |
+| 4. Use | Each side opens channels it owns; each receiver keeps or declines each stream. Only a connector opening a custom channel needs the menu first. |
+
+Four rules govern use:
+
+1. **Declining is final for the connection.** STOP_SENDING code 1 means
+   “not on this connection.” The sender MUST NOT reopen that channel on
+   this connection. Code 2 (`malformed`) still allows reopening; ending a
+   stream does not otherwise revoke its channel (sections 3.5 and 3.7).
+2. **A missing menu is not a decline.** A receiver MUST NOT decline a
+   custom stream just because the listener's menu has not arrived. It MUST
+   hold the stream unread until the menu arrives and is validated, then
+   keep or decline it under the contract and its own policy. This temporary
+   wait is the exception to section 3.5's prohibition on leaving unwanted
+   streams unread. An invalid initial menu leaves custom channels
+   unavailable, so pending custom streams are declined with code 1.
+3. **Identity determines the offer, fixed for the connection.** The
+   listener knows the connector's handshake identity before sending `info`
+   and chooses the menu by that identity's tier and its application policy.
+   The menu MUST NOT change during the connection. To obtain a different
+   menu, reconnect (section 6).
+4. **No order, acknowledgement, or ready message.** Each side MUST send
+   its own `info` before opening other streams. Standard traffic and
+   listener-opened custom streams MAY start immediately after that, without
+   waiting for the peer's `info` or hints such as `reads_contracts`. A
+   connector MUST receive and validate the listener's menu before opening
+   a custom channel or sending custom datagrams. Receivers MUST accept
+   standard traffic that overtakes `info`; custom streams use rule 2.
+   There is no additional cross-stream delivery order, selection exchange,
+   acknowledgement, or readiness message. Capability hints remain optional
+   and MUST NOT become a startup prerequisite.
 
 ## 4. Trust
 
@@ -338,7 +389,8 @@ Each endpoint MAY keep a list of fingerprints it knows, each with a tier:
 | `maker` | Every authenticated peer whose key is not registered |
 
 An endpoint decides which channels to open toward a peer, and which to read
-from it, by that peer's tier. A device might send plain
+from it, by that peer's tier. Section 3.9 ties this policy to the connection's
+fixed menu and channel use. A device might send plain
 shots to makers and also club data and a private diagnostics channel to
 developers. A tournament simulator might accept shots only from fingerprints it has
 registered as real hardware.
@@ -394,35 +446,36 @@ standard channel has one owner, who opens the stream, and one direction.
 One-way channels use QUIC unidirectional streams. To use a channel, open a
 stream, write the channel ID, write messages. There is no negotiation.
 
-| ID | Name | Opened by | Flows | Stream | Max message | Needed for play |
-|---|---|---|---|---|---|---|
-| 0 | `info` | either | opener to peer | one-way | 65,535 | yes, first message |
-| 1 | `shot` | device | device to sim | one-way | 65,535 | yes |
-| 2 | `open_connect` | device | both ways | two-way | 65,535 | no, compatibility |
-| 3 | `club` | device | device to sim | one-way | 65,535 | no |
-| 4 | `status` | device | device to sim | one-way | 65,535 | no |
-| 5 | `control` | controller | controller to sim | one-way | 65,535 | no |
-| 6 | `state` | sim | sim to device | one-way | 65,535 | no |
-| 7 | `result` | sim | sim to device | one-way | 65,535 | no |
-| 8 | `flight` | device | device to sim | one-way | 65,535 | no |
-| 9 to 999 | reserved | | | | | |
-| 1000 and up | private | either | any | any | own | no |
+| ID | Name | Contract | Opened by | Flows | Stream | Max message | Needed for play |
+|---|---|---|---|---|---|---|---|
+| 0 | `info` | `io.common-golf.info-v1` | either | opener to peer | one-way | 65,535 | yes, first message |
+| 1 | `shot` | `io.common-golf.shot-v1` | device | device to sim | one-way | 65,535 | yes |
+| 2 | reserved | | | | | | |
+| 3 | `club` | `io.common-golf.club-v1` | device | device to sim | one-way | 65,535 | no |
+| 4 | `status` | `io.common-golf.status-v1` | device | device to sim | one-way | 65,535 | no |
+| 5 | `control` | `io.common-golf.control-v1` | controller | controller to sim | one-way | 65,535 | no |
+| 6 | `state` | `io.common-golf.state-v1` | sim | sim to device | one-way | 65,535 | no |
+| 7 | `result` | `io.common-golf.result-v1` | sim | sim to device | one-way | 65,535 | no |
+| 8 | `flight` | `io.common-golf.flight-v1` | device | device to sim | one-way | 65,535 | no |
+| 9 to 999 | reserved | | | | | | |
+| 1000 and up | custom | per connection | contract-defined | any | any | own | no |
 
-Every simulator MUST read channel 1. A simulator MAY also offer channel 2.
-A device MUST write channel 0 and then channel 1 or channel 2. Everything
-else is optional and independent.
+The Contract column gives documentation identifiers for the fixed channels.
+The negotiated ALPN defines channels 0, 1, and 3–8, including their numbers,
+ownership, framing, and message semantics. Endpoints do not send, parse, or negotiate
+these identifiers to use a standard channel. The identifiers do not add any
+wire fields or change which channels an endpoint must support.
 
-Channels 1 and 2 may both be open on one connection, but a device MUST NOT
-send the same shot on both: a simulator cannot reliably match an Open
-Connect `ShotNumber` to a `shot_uuid` and would count it twice. A device
-SHOULD use one shot channel per connection, channel 1 by default. Section
-5.2 says what channel 2 is for.
+Every simulator MUST read channel 1. A device MUST write channel 0 before
+opening other streams. A launch monitor may publish native shots on channel
+1, use the offered Open Connect custom contract in section 6.1, or use both
+concurrently, including for the same shots. Other channels are optional and
+independent.
 
 Rules for every standard channel:
 
-- One JSON object per message. Every object on channels 0, 1, 3 to 8 has a
-  `type` string equal to the channel name. Channel 2 carries foreign JSON
-  with no envelope.
+- One JSON object per message. Every object on channels 0, 1, and 3 to 8 has
+  a `type` string equal to the channel name.
 - Receivers MUST ignore fields they do not know.
 - Senders MUST NOT send fields with the wrong unit under a known name.
 - Nothing is acknowledged. A sender never waits for a reply. Where a
@@ -481,10 +534,21 @@ The first message each side sends, on the first stream it opens. Required.
 | `name` | string | | Display name |
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
+| `reads` | array of integer | | Optional standard-channel read capability hint (0, 1, and 3–8) |
+| `contracts` | array of objects | | Listener's immutable custom-channel menu; section 6 |
+| `reads_contracts` | array of string | | Optional exact custom contract identifiers this peer reads; section 6 |
 
 ```json
 {"type": "info", "protocol_version": "0.3.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
 ```
+
+In draft 3, `reads` lists standard channel numbers (0, 1, and 3–8).
+An absent list makes no claim; an empty list advertises no standard readers.
+This is a capability hint, not permission, preference, or acknowledgement.
+A sender may use it to avoid unwanted streams or open a stream and accept a
+decline. It MUST NOT become a startup prerequisite (section 3.9).
+Use `reads_contracts` for custom contracts, including Open Connect: channel 2
+is reserved in draft 3. Neither list requires choosing only one shot format.
 
 ### 5.1 Channel 1: `shot`
 
@@ -546,38 +610,13 @@ without counting it again; one that does not may ignore subsequent snapshots.
 {"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 67.3, "vertical_launch_angle_degrees": 12.1, "horizontal_launch_angle_degrees": -1.4, "total_spin_revolutions_per_minute": 2750, "spin_axis_degrees": -3.2, "player_dexterity": "right", "measured_at": "2022-02-22T19:22:21.950Z"}
 ```
 
-### 5.2 Channel 2: `open_connect`
+### 5.2 Channel 2: reserved
 
-GSPro Open Connect v1 JSON, carried verbatim in both directions on one
-two-way stream. The device writes the launch monitor body; the simulator
-writes the `{Code, Message, Player}` reply. Field names, casing and units
-are exactly as GSPro documents them. Nothing is translated.
-
-This channel is a bridge for firmware that only emits Open Connect JSON,
-so that such a device changes only its socket. It is not the baseline;
-channel 1 is. A device that can speak channel 1 SHOULD, and a new device
-has no reason to implement channel 2 at all.
-
-A simulator MAY offer this channel. One that does MUST reply to each body
-the way GSPro would, because Open Connect devices expect it. That is the
-one place in this document where a reply is required, and it is inherited.
-A simulator that does not offer it declines the stream with code 1, and
-the device has no fallback: it reports that this simulator does not
-support Open Connect compatibility, which is the same experience as a
-refused TCP socket today. A device that can speak both MAY try channel 2
-first and fall back to channel 1 when declined, but never runs both for
-the same shots.
-
-The device writes the channel prefix when it opens the stream. The
-simulator writes only framed replies.
-
-```json
-{"DeviceID": "Garage LM", "Units": "Yards", "ShotNumber": 12, "APIversion": "1", "BallData": {"Speed": 150.5, "SpinAxis": -3.2, "TotalSpin": 2750, "HLA": -1.4, "VLA": 12.1}, "ShotDataOptions": {"ContainsBallData": true, "ContainsClubData": false}}
-```
-
-```json
-{"Code": 200, "Message": "Shot received"}
-```
+Channel 2 is reserved in draft 3. Receivers MUST decline a stream on this
+number with STOP_SENDING code 1. A custom menu entry assigning channel 2 is
+malformed, like any menu entry below 1000. Open Connect is the custom
+contract `io.common-golf.open-connect-v1` in section 6.1 and has no fixed
+channel number. Drafts 1 and 2 retain their original channel-2 definition.
 
 ### 5.3 Channel 3: `club`
 
@@ -720,30 +759,101 @@ measurement with a derived value. `shot_uuid` required, rest optional.
 Trajectories as point arrays are deliberately not carried. They are library
 output; see OpenGolfCoach.
 
-## 6. Private channels: 1000 and up
+## 6. Custom channels: 1000 and up
 
-Channels 1000 and above belong to the two endpoints of a connection and to
-nobody else. Their meaning is whatever those two endpoints arranged, and
-the arrangement is scoped to that connection. Channel 1000 on a device's
-connection to vendor A's software can mean something unrelated to channel
-1000 on the same device's connection to vendor B's software. There is no
-registry and nothing to register.
+In draft 3, the listener assigns numbers 1000 and above to exact contract
+identifiers in its first `info`. This menu is fixed for the connection and
+contains only contracts it offers to that peer. The same number can name a
+different contract on another connection. A missing `contracts` field or
+an empty array offers no custom channels. All numbers below 1000 are
+invalid in this menu, including reserved channel 2.
 
-A private channel MAY carry JSON in this document's framing, or anything
-else; the receiver knows what to expect because it arranged it. Typical
-uses: diagnostics, licence and unlock traffic, firmware, raw sensor dumps,
-anything proprietary. All of it is already encrypted by the transport.
+Section 3.9 defines when channels can open, how receivers handle streams
+that overtake the menu, and why a decline lasts for the connection. The
+contract defines who opens, which direction data flows, and
+whether it uses framed JSON, raw streams, or datagrams. The opener writes
+the four-byte channel ID followed directly by contract data; there is no
+`{"type":"private"}` opening message. The [draft-3 profile](../implementations/DRAFT3.md#custom-channel-menu-in-info)
+defines menu validation, immutability, and listener-opened streams.
 
-The opener SHOULD send, as the first message on a private channel, a JSON
-object naming the arrangement so the peer can decline what it does not
-recognise:
+A device SHOULD open custom channels only toward peers whose tier
+warrants it (section 4).
+
+Device-specific configuration, such as selecting a marked or markerless
+ball, belongs in a vendor custom contract, usually on the vendor app's own
+connection. It does not require a common `SetBallType` command. Simulator
+context on channel 6 describes the game; it is not a general device settings
+API. The simulator can observe measurement consequences through `estimated`
+(section 7) and device status without understanding the vendor's settings.
+
+### 6.1 Primary example: Open Connect
+
+`io.common-golf.open-connect-v1` is the primary custom-channel example.
+The listener offers it in its menu, for example:
 
 ```json
-{"type": "private", "name": "com.example.diagnostics", "version": "1.2.0"}
+{"type":"info","protocol_version":"0.3.0","contracts":[{"channel":1000,"contract":"io.common-golf.open-connect-v1"}]}
 ```
 
-A device SHOULD open private channels only toward peers whose tier
-warrants it (section 4).
+Here 1000 is a listener-assigned handle for this connection, not a reserved
+Open Connect number. The identifier names the CGP transport contract for
+Open Connect v1 bodies, plus one optional CGP field. It is in the protocol's
+reserved namespace.
+
+| Contract property | Definition |
+|---|---|
+| Identifier | `io.common-golf.open-connect-v1` |
+| Opened by | Device, regardless of which endpoint is the QUIC connector |
+| Transport | One active bidirectional reliable stream on the assigned channel |
+| Device to simulator | Open Connect v1 bodies, plus one optional CGP field: `shot_uuid` |
+| Simulator to device | Open Connect `{Code, Message, Player}` replies, unchanged |
+| Framing | Four-byte length-prefixed UTF-8 JSON objects in both directions |
+| Maximum message | 65,535 bytes in either direction |
+
+The device writes the assigned four-byte channel ID once when opening the
+stream. The simulator's reply half has no second channel prefix. There is
+no CGP `type` envelope and no private-channel opening message. The payload's
+field names, casing, units, and `ShotNumber` remain as Open Connect defines
+them. A device MAY add `shot_uuid` to a request body. When present, it MUST
+use the UUIDv7 format, length, and pattern in section 5 and MUST retain the
+same UUID for the same shot across updates, replays, and reconnects. If the
+device also sends that shot on channel 1, both bodies MUST use the same
+`shot_uuid`. `ShotNumber` remains a separate Open Connect field. Replies
+remain unchanged and do not echo `shot_uuid`.
+
+A bridge forwarding
+requests to real GSPro on TCP 921 SHOULD strip `shot_uuid` unless acceptance
+of that extra key has been tested against the target GSPro version. GSPro's
+handling of unknown keys has not been confirmed; byte-for-byte forwarding
+would also forward this CGP field.
+
+In the usual device-listener setup, the simulator can advertise
+`"reads_contracts":["io.common-golf.open-connect-v1"]` in its own `info`.
+The device may use that hint or simply open the offered stream and accept
+being declined with code 1. A simulator that accepts the stream MUST
+provide the Open Connect replies. That requirement belongs to this custom
+contract; standard channels remain unacknowledged.
+
+Channel 1 and this custom channel are independent and MAY be used
+concurrently, including for the same shots. CGP imposes no preference,
+fallback ordering, or mutual-exclusion rule between them.
+
+Device body, following the channel prefix and its message length:
+
+```json
+{"DeviceID": "Garage LM", "Units": "Yards", "ShotNumber": 12, "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "APIversion": "1", "BallData": {"Speed": 150.5, "SpinAxis": -3.2, "TotalSpin": 2750, "HLA": -1.4, "VLA": 12.1}, "ShotDataOptions": {"ContainsBallData": true, "ContainsClubData": false}}
+```
+
+Simulator reply, with its message length and no channel prefix:
+
+```json
+{"Code": 200, "Message": "Shot received"}
+```
+
+The [Open Connect payload schema](../schema/open_connect.json) describes
+these bodies independently of the assigned channel number. Other custom
+contracts can use different framing or transports without changing the
+standard channels.
 
 ## 7. Units, frames and signs
 
@@ -784,13 +894,16 @@ estimated; it is derived.
 
 ### 8.1 GSPro Open Connect v1
 
-Carried unchanged on channel 2. For a simulator that wants to normalise
+Carried as Open Connect v1 bodies, plus optional `shot_uuid`, by the
+`io.common-golf.open-connect-v1` custom contract (section 6.1). For a
+simulator that wants to normalise
 those bodies into channel 1 and 3 terms, with `Units: "Yards"` meaning mph,
 rpm, degrees and yards:
 
 | Open Connect | Common Golf | Factor |
 |---|---|---|
-| `ShotNumber` | `shot_uuid` | Allocate a UUIDv7 per source shot and retain the mapping for related messages and updates |
+| `shot_uuid` (when present) | `shot_uuid` | Preserve the supplied UUIDv7 |
+| `ShotNumber` (when `shot_uuid` is absent) | `shot_uuid` | Allocate a UUIDv7 per source shot and retain the mapping for related messages and updates |
 | `BallData.Speed` | `ball_speed_meters_per_second` | × 0.44704 |
 | `BallData.VLA` | `vertical_launch_angle_degrees` | |
 | `BallData.HLA` | `horizontal_launch_angle_degrees` | |
@@ -836,7 +949,7 @@ can be converted to UTC RFC 3339; otherwise omit the measurement timestamp.
 Assign the source shot a separate UUIDv7 and retain it for related messages
 and updates. `status.uptime_seconds` and `status.firmware_version` go to
 `status` and `info`. Nova's TCP API is
-Open Connect and goes on channel 2. Nova's touch bar maps to `control`:
+Open Connect and uses the `io.common-golf.open-connect-v1` custom contract. Nova's touch bar maps to `control`:
 Left and Right to `left` and `right`, A to `reset_aim`, Y to `heatmap`.
 
 ### 8.4 OpenGolfCoach
@@ -918,7 +1031,8 @@ source device's convention.
 
 ## 9. Not in this version
 
-Datagrams. Telemetry streams. Media and video. Trajectory point arrays.
+No standard telemetry, media/video, or trajectory-array contract is defined.
+Custom raw streams and datagrams can carry such application-defined data.
 Per-message signatures. Cloud or remote lookup of devices. Simulator-to-
 device configuration. Multiplayer, tournaments and scoring. CBOR or any
 non-JSON encoding on standard channels. Manual addressing in user
