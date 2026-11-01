@@ -1,49 +1,34 @@
-# Schemas
+# Message schemas
 
-The top-level files track the unreleased draft-3 discussion in the
-[RFC](../rfc/0001-common-golf-protocol.md). They are not published draft-2
-schemas. Frozen copies remain unchanged:
+This directory contains JSON Schemas for the messages defined in the
+[protocol specification](../rfc/0001-common-golf-protocol.md).
 
-- `draft-1/`: 0.1.0 and 0.1.1 (identical), ALPN `common-golf/draft-1`. Uses
-  `shot.reduced_accuracy`.
-- `draft-2/`: 0.2.0, ALPN `common-golf/draft-2`. Uses `shot.estimated` and
-  `club.estimated`.
+| Directory | Protocol versions | ALPN |
+|---|---|---|
+| Top-level files | Draft 3, in development | `common-golf/draft-3` |
+| `draft-1/` | 0.1.0 and 0.1.1, which share the same schemas | `common-golf/draft-1` |
+| `draft-2/` | 0.2.0 | `common-golf/draft-2` |
 
-Choose the schema set by the negotiated ALPN, not `protocol_version`.
+Select the schema set using the negotiated ALPN. The `protocol_version`
+field does not select the wire format. Published draft schemas are frozen.
 
-`tests/compatibility/schema_check.py` uses the working schemas for draft 3 and
-the frozen copies for drafts 1/2, so editing the working schemas doesn't
-change the checks for a published draft.
-It also checks rules JSON Schema can't express, such as `estimated` naming
-present numeric fields, and a zero total spin having a zero spin axis.
+## Validation scope
 
-Schemas cover message shape only. Stream direction, channel ownership,
-framing, and identity are covered by the implementation tests.
+The schemas validate message structure and field values. Implementation
+tests cover stream direction, channel ownership, framing, and identity.
+The shared [schema checker](../tests/compatibility/schema_check.py) also
+validates cross-field rules, including references in `estimated` and the
+requirement for a zero spin axis when total spin is zero.
 
-The working `shot`, `club`, `result`, and `flight` schemas use canonical
-UUIDv7 `shot_uuid` identities. Explicit length and pattern constraints enforce
-the UUID spelling and version even without a format checker. `measured_at`
-is a separate optional UTC RFC3339 measurement time; it is not inferred from
-the UUID. Whole snapshots replace earlier snapshots for the same UUID and
-channel when a receiver accepts updates. There is no `final` field.
+For draft 3:
 
-`open_connect.json` now describes the custom contract
-`io.common-golf.open-connect-v1`, not channel 2. Its optional `shot_uuid`
-extends request bodies only; replies remain unchanged. The listener's first
-`info.contracts` fixes custom numbers for the connection. Schema validation
-covers entry shape, identifier syntax, and bounds; runtime validation also
-checks unique channel numbers, decimal-integer wire notation, endpoint role,
-and menu immutability. `reads` and `reads_contracts` are optional hints.
-
-Working channel 4 is now `device_status.json`, and channel 6 is
-`simulator_state.json`. Device placement and actual capture mode are reported
-on channel 4; optional simulator-requested capture mode and target distance
-are reported on channel 6. These remain patches: omitted fields are unchanged,
-null clears a field, and nested objects replace rather than merge. The old
-status/state schemas remain in the frozen draft directories.
-
-`shot.ball_lie` reports the known hitting-area lie from device to simulator,
-including simulated sand/rough and a tee. It does not prescribe a numerical
-penalty. The old `tee_position` and `shot_kind` fields are removed; actual
-capture mode is device state. Unknown player dexterity is omitted instead of
-sent as the string `unknown`.
+- Shot identifiers use the canonical UUIDv7 spelling. Length and pattern
+  constraints enforce this without a JSON Schema format checker.
+- `device_status` (channel 4) and `simulator_state` (channel 6) contain
+  optional state fields and are applied as patches.
+- `open_connect.json` describes messages for the
+  `io.common-golf.open-connect-v1` custom contract, including the optional
+  `shot_uuid` on requests.
+- `info.json` validates contract menu entries, identifier syntax, and bounds.
+  Runtime checks enforce unique channel numbers, integer notation, endpoint
+  roles, and menu immutability.
