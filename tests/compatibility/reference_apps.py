@@ -50,7 +50,11 @@ async def run_draft(draft, directory, use_discovery, defaults=False):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self.received=[]
+                self.sent=[]
                 devices[name]=self
+            def publish(self, channel, message):
+                self.sent.append(channel)
+                return super().publish(channel, message)
             def on_message(self, channel, message, stream_id):
                 check_example_message(draft, channel, message)
                 self.received.append((channel,message))
@@ -68,8 +72,10 @@ async def run_draft(draft, directory, use_discovery, defaults=False):
         for cls, role, _, _ in CASES:
             name=prefix+'-'+cls.__module__
             device_identity=Identity(directory/cls.__module__, name)
-            factory=partial(tracked(cls, name), role=role, **profile,
-                            trusted={identity.fingerprint:'developer'})
+            policy = {}
+            if cls is launch_monitor_full.Device:
+                policy['peer_groups'] = {identity.fingerprint: {'group': 'developer'}}
+            factory=partial(tracked(cls, name), role=role, **profile, **policy)
             if use_discovery:
                 await stack.enter_async_context(listen(name, device_identity, factory, **profile))
             else:
@@ -116,8 +122,23 @@ async def run_draft(draft, directory, use_discovery, defaults=False):
             assert preliminary['shot_number']==final['shot_number']
         assert ('reduced_accuracy' in preliminary)==(draft==Draft.ONE)
         assert ('estimated' in preliminary)==(draft!=Draft.ONE)
+        # Unlisted peers receive shots and status without club or flight data.
+        full_name = prefix+'-launch_monitor_full'
+        other_identity = Identity(directory/'other-sim', 'reference-sim')
+        async with dial(peers[full_name], other_identity,
+                partial(RecordingSim, role='sim', **profile), **profile) as other:
+            deadline = asyncio.get_running_loop().time()+8
+            while not ({0,1,4} <= {ch for ch,_ in other.received}
+                       and any(ch == 7 for ch,_ in devices[full_name].received)):
+                assert asyncio.get_running_loop().time()<deadline, 'Unlisted peer did not receive baseline data'
+                await asyncio.sleep(.02)
+            assert not {3,8} & set(devices[full_name].sent)
+            assert not {3,8} & {ch for ch,_ in other.received}
         assert not Sim.failures, f'{Sim.failures} stream errors'
-        return [{'draft':int(draft),'defaults':defaults,'example':cls.__module__,'result':'passed'} for cls,_,_,_ in CASES]
+        results = [{'draft':int(draft),'defaults':defaults,'example':cls.__module__,'result':'passed'} for cls,_,_,_ in CASES]
+        results.append({'draft':int(draft),'defaults':defaults,'example':'launch_monitor_full',
+                        'policy':'unlisted peer','result':'passed'})
+        return results
 
 
 async def main(args):

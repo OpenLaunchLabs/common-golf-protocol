@@ -11,8 +11,12 @@ from common_golf import Connection, Draft, Identity, listen, new_shot_uuid
 
 class Device(Connection):
 
+    def __init__(self, *args, peer_groups=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.peer_groups = peer_groups or {}
+
     def on_connected(self):
-        print(f"connected fingerprint={self.peer_fingerprint} tier={self.peer_tier}", flush=True)
+        print(f"connected fingerprint={self.peer_fingerprint}", flush=True)
         self._publish_task = asyncio.create_task(self.publish_measurements())
 
     async def publish_measurements(self):
@@ -33,7 +37,8 @@ class Device(Connection):
                 preliminary["estimated"] = ["total_spin_revolutions_per_minute", "spin_axis_degrees"]
             messages = [(4, {"type": "device_status" if self.draft == Draft.THREE else "status", "ready": True, "ball_detected": True, "battery_percent": 87}),
                         (1, preliminary), (1, dict(base, total_spin_revolutions_per_minute=spin, spin_axis_degrees=spin_axis, final=True))]
-            if self.peer_tier != "maker":
+            group = self.peer_groups.get(self.peer_fingerprint, {}).get("group")
+            if group in ("internal", "developer"):
                 messages += [(3, {"type": "club", **shot_identity, "club_speed_meters_per_second": round(ball_speed / 1.48, 2), "final": True}),
                              (8, {"type": "flight", **shot_identity, "carry_distance_meters": round(200.0 * (ball_speed / 65.0) ** 2, 2), "final": True})]
             for channel, message in messages:
@@ -55,16 +60,16 @@ def main():
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
-    arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
+    arguments.add_argument("--peer-groups", help="JSON mapping of fingerprints to groups")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")
     args = arguments.parse_args()
 
     async def run():
         draft = Draft(args.draft)
         identity = Identity(args.identity or ".cgp-identities/full-device", "full-device")
-        trusted = json.loads(Path(args.trusted).read_text()) if args.trusted else {}
+        peer_groups = json.loads(Path(args.peer_groups).read_text()) if args.peer_groups else {}
         factory = partial(Device, role="device", draft=draft,
-                          trusted=trusted, info={"name": "full-device"})
+                          peer_groups=peer_groups, info={"name": "full-device"})
         async with listen("full-device", identity, factory, draft=draft):
             print(f"full-device: advertised via DNS-SD ({draft.alpn})", flush=True)
             if args.duration:

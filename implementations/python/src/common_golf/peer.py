@@ -92,8 +92,7 @@ async def run(args):
     fixture_messages = [(entry["channel"], entry["message"]) for entry in fixtures] if fixtures is not None else samples(draft, role)
     class Peer(Connection):
         def on_connected(self):
-            record({"kind": "connected", "draft": int(self.draft), "fingerprint": self.peer_fingerprint,
-                    "tier": self.peer_tier})
+            record({"kind": "connected", "draft": int(self.draft), "fingerprint": self.peer_fingerprint})
             for channel, message in fixture_messages:
                 if channel != 0 and (self.draft != Draft.THREE or channel < 1000):
                     self.publish(channel, message)

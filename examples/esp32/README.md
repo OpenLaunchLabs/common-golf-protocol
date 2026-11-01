@@ -22,7 +22,6 @@ result messages contain placeholder values.
 By default, the simulator connects only to devices whose mDNS `vendor` is
 `Common Golf example`, `CGP hardware test`, or `Example`. Disable **Only
 connect to demo/example devices** in menuconfig to allow other vendors.
-This filter selects devices; all connected peers receive `maker` trust.
 
 ## Build and flash
 

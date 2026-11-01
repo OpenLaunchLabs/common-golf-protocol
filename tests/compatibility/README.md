@@ -67,9 +67,9 @@ and Open Connect replies.
 ## Reference applications
 
 `reference_apps.py` runs the simulator with all five example devices on all
-three drafts. It covers Open Connect replies, shot updates, and trusted
-club and flight channels. Pass `--discovery` to connect through DNS-SD
-instead of direct addresses.
+three drafts. It covers Open Connect replies, shot updates, and club and
+flight data delivery. Pass `--discovery` to connect through
+DNS-SD instead of direct addresses.
 
 ## Discovery
 

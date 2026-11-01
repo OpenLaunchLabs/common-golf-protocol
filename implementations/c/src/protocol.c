@@ -9,7 +9,6 @@ const char *cgp_alpn(cgp_draft draft) {
 const char *cgp_protocol_version(cgp_draft draft) {
     return draft == CGP_DRAFT_1 ? "0.1.1" : draft == CGP_DRAFT_2 ? "0.2.0" : draft == CGP_DRAFT_3 ? "0.3.0" : NULL;
 }
-const char *cgp_peer_tier(const cgp_peer *p) { return p->tier; }
 const char *cgp_peer_identity(const cgp_peer *p) { return p->fingerprint[0] ? p->fingerprint : NULL; }
 cgp_draft cgp_peer_draft(const cgp_peer *p) { return p->engine->draft; }
 void *cgp_peer_user_data(const cgp_peer *p) { return p->user_data; }

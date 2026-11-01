@@ -4,7 +4,6 @@ import asyncio
 from functools import partial
 import json
 import random
-from pathlib import Path
 
 from common_golf import Connection, Draft, Identity, listen, new_shot_uuid
 
@@ -13,7 +12,7 @@ class Device(Connection):
     """A minimum CGP launch monitor with simulated measurements."""
 
     def on_connected(self):
-        print(f"connected fingerprint={self.peer_fingerprint} tier={self.peer_tier}", flush=True)
+        print(f"connected fingerprint={self.peer_fingerprint}", flush=True)
         self._publish_task = asyncio.create_task(self.publish_measurements())
 
     async def publish_measurements(self):
@@ -41,16 +40,14 @@ def main():
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
-    arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")
     args = arguments.parse_args()
 
     async def run():
         draft = Draft(args.draft)
         identity = Identity(args.identity or ".cgp-identities/minimum-device", "minimum-device")
-        trusted = json.loads(Path(args.trusted).read_text()) if args.trusted else {}
         factory = partial(Device, role="device", draft=draft,
-                          trusted=trusted, info={"name": "minimum-device"})
+                          info={"name": "minimum-device"})
         async with listen("minimum-device", identity, factory, draft=draft):
             print(f"minimum-device: advertised via DNS-SD ({draft.alpn})", flush=True)
             if args.duration:

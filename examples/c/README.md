@@ -29,5 +29,4 @@ implementations/c/build/cgp-demo --role simulator --discover "C example" --ident
 ```
 
 Message callbacks are in `demo_app.c`; identity, discovery, and polling are
-in `main.c`. The example logs peer fingerprints after the handshake and
-assigns every peer the `maker` trust tier.
+in `main.c`. The example logs peer fingerprints after the handshake.

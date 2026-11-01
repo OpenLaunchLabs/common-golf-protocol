@@ -2,7 +2,7 @@
 
 The `common-golf-protocol` crate provides QUIC connections, DNS-SD
 discovery, persistent Ed25519 identities and protocol message handling.
-It supports standard channels, trust tiers, server menus, custom JSON,
+It supports standard channels, server menus, custom JSON,
 raw streams and sequenced datagrams.
 
 ## Build
@@ -48,7 +48,7 @@ The typed `message::Message` variants for drafts 1 and 2 discard unknown
 fields. Their status and state patches use `Patch<T>` to distinguish
 absent, null and set values.
 
-## Identity and trust
+## Identity
 
 `Identity::load_or_create(directory)` stores the Ed25519 key as
 `identity.pem` (mode 0600 on Unix). The fingerprint is the raw 32-byte
@@ -59,7 +59,9 @@ Draft 3 uses mutual Ed25519 raw public keys, verifying both signatures.
 `key` before opening channels. Drafts 1 and 2 use self-signed certificates:
 the verifier checks the key type and signature, and ignores dates, issuers
 and names. Servers for these drafts request an optional client identity.
-Missing or unlisted keys map to `trust::Tier::Maker`.
+
+Read the authenticated fingerprint with `identity::peer_fingerprint(&connection)`
+or `Peer::fingerprint`.
 
 ## Usage
 
