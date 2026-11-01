@@ -36,17 +36,17 @@ static void message(cgp_peer *p,uint32_t channel,const char *json,size_t length,
 }
 int main(void) {
     test_app server={.server=true},client={0};
-    cgp_options o={.role=CGP_LAUNCH_MONITOR,.draft=CGP_DRAFT_2,.listener=true,.name="native regression",
+    cgp_options o={.role=CGP_LAUNCH_MONITOR,.draft=CGP_DRAFT_2,.is_server=true,.name="native regression",
         .callbacks={.connected=connected,.message=message},.user=&server};
     inet_pton(AF_INET,"127.0.0.1",&o.local_ip);
-    cgp_engine *listener=cgp_create_options(&o);assert(listener);
-    o.role=CGP_SIMULATOR;o.listener=false;o.user=&client;
-    cgp_engine *connector=cgp_create_options(&o);assert(connector);
-    struct sockaddr_in address={.sin_family=AF_INET,.sin_addr=o.local_ip,.sin_port=htons(cgp_port(listener))};
-    assert(cgp_connect(connector,&address,"native regression"));
+    cgp_engine *server_engine=cgp_create_options(&o);assert(server_engine);
+    o.role=CGP_SIMULATOR;o.is_server=false;o.user=&client;
+    cgp_engine *client_engine=cgp_create_options(&o);assert(client_engine);
+    struct sockaddr_in address={.sin_family=AF_INET,.sin_addr=o.local_ip,.sin_port=htons(cgp_port(server_engine))};
+    assert(cgp_connect(client_engine,&address,"native regression"));
     uint64_t deadline=cgp_now_ns()+UINT64_C(10000000000);
     while(cgp_now_ns()<deadline && (!server.messages || !client.messages || !server.private_messages || !client.private_messages || !server.replies || !client.replies)) {
-        cgp_poll(listener);cgp_poll(connector);usleep(1000);
+        cgp_poll(server_engine);cgp_poll(client_engine);usleep(1000);
         if (client.reply_due) {
             cgp_stream *s=client.peer->streams;
             while (s && !(s->assigned && s->channel==2)) s=s->next;
@@ -57,6 +57,6 @@ int main(void) {
     assert(server.private_messages==1 && client.private_messages==1);
     assert(server.replies==1 && client.replies==1);
     assert(!server.peer->failed && !client.peer->failed);
-    cgp_destroy(connector);cgp_destroy(listener);
+    cgp_destroy(client_engine);cgp_destroy(server_engine);
     return 0;
 }

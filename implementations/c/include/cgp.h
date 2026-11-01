@@ -40,9 +40,9 @@ typedef struct {
     const char *(*trust_tier)(const char *fingerprint, void *user);
 } cgp_callbacks;
 typedef struct {
-    cgp_role role;
+    cgp_role role; /* Application role, independent of the QUIC connection role. */
     cgp_draft draft; /* Zero/omitted selects draft 3; 1/2 require explicit opt-in. */
-    bool listener;
+    bool is_server; /* true accepts QUIC connections; false initiates them. */
     const char *name;
     struct in_addr local_ip;
     /* Stable identity directory on POSIX; NULL creates an ephemeral test key.
@@ -69,7 +69,7 @@ unsigned cgp_connections(const cgp_engine *);
 void cgp_statistics(const cgp_engine *);
 /* Queues a strict UTF-8 JSON object. Channels use one stream per direction.
  * Open Connect replies use its device-opened bidirectional stream (channel 2
- * on drafts 1/2, a listener-menu channel on draft 3).
+ * on drafts 1/2, a server-menu channel on draft 3).
  * false means malformed/forbidden or backpressure: retry later as appropriate.
  * A declined channel returns false; the connection remains usable. */
 bool cgp_publish(cgp_peer *, unsigned channel, const char *json);
@@ -77,8 +77,8 @@ bool cgp_publish(cgp_peer *, unsigned channel, const char *json);
 bool cgp_close_channel(cgp_peer *, uint32_t channel);
 /* Queue FIN after all buffered data. No reset or data loss. */
 bool cgp_finish_channel(cgp_peer *, uint32_t channel);
-/* Drafts 1/2: static JSON binding. Draft 3: listener-only menu entry, before info.
- * The first listener info automatically advertises all configured entries. */
+/* Drafts 1/2: static JSON binding. Draft 3: server-only menu entry, before info.
+ * The first server info automatically advertises all configured entries. */
 bool cgp_bind_private(cgp_peer *, uint32_t, cgp_private_kind, const char *contract);
 bool cgp_custom_ready(const cgp_peer *);
 int64_t cgp_open_raw(cgp_peer *, uint32_t channel, bool bidirectional);

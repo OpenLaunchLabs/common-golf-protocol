@@ -12,12 +12,12 @@
 #include <unistd.h>
 #include <signal.h>
 
-typedef struct { FILE *output; bool listener; const char *version; unsigned received; bool connected; cJSON *fixtures; unsigned datagrams; uint64_t next_datagram; } app;
+typedef struct { FILE *output; bool is_server; const char *version; unsigned received; bool connected; cJSON *fixtures; unsigned datagrams; uint64_t next_datagram; } app;
 static volatile sig_atomic_t done;
 static void stop(int n) { (void)n; done=1; }
 static void emit_fixtures(cgp_peer *p,app *a,bool custom) {
     char draft[2]={(char)('0'+cgp_peer_draft(p)),0};
-    cJSON *rows=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(a->fixtures,"drafts"),draft),a->listener ? "listen" : "connect"),*row;
+    cJSON *rows=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(a->fixtures,"drafts"),draft),a->is_server ? "listen" : "connect"),*row;
     cJSON_ArrayForEach(row,rows) {
         cJSON *channel=cJSON_GetObjectItemCaseSensitive(row,"channel");
         if(!cJSON_IsNumber(channel))continue;
@@ -37,7 +37,7 @@ static void menu(cgp_peer *p,bool ready,void *user) {
     app *a=user;fprintf(a->output,"{\"kind\":\"menu\",\"ready\":%s}\n",ready ? "true" : "false");fflush(a->output);
     if(!ready)return;
     if(a->fixtures)emit_fixtures(p,a,true);
-    else if(a->listener) {
+    else if(a->is_server) {
         cgp_publish(p,1000,"{\"type\":\"private\",\"name\":\"io.common-golf.interop-json-v1\",\"message\":\"opaque JSON ☃\"}");
         cgp_publish(p,1003,"{\"DeviceID\":\"C reference\",\"Units\":\"Yards\",\"ShotNumber\":2,\"APIversion\":\"1\",\"BallData\":{\"SpinAxis\":0,\"TotalSpin\":2500,\"Speed\":150,\"VLA\":12,\"HLA\":0},\"ShotDataOptions\":{\"ContainsBallData\":true,\"ContainsClubData\":false}}");
     }
@@ -68,8 +68,8 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
     fprintf(a->output,"{\"kind\":\"connected\",\"fingerprint\":\"%s\",\"alpn\":\"%s\"}\n",fingerprint ? fingerprint : "",cgp_alpn(cgp_peer_draft(p))); fflush(a->output);
     char info[256];
     snprintf(info,sizeof(info),"{\"type\":\"info\",\"protocol_version\":\"%s\",\"name\":\"C reference\"}",a->version ? a->version : cgp_protocol_version(cgp_peer_draft(p)));
-    if(cgp_peer_draft(p)!=CGP_DRAFT_3 || a->listener)cgp_bind_private(p,1000,CGP_PRIVATE_JSON,"io.common-golf.interop-json-v1");
-    if(cgp_peer_draft(p)==CGP_DRAFT_3 && a->listener) {
+    if(cgp_peer_draft(p)!=CGP_DRAFT_3 || a->is_server)cgp_bind_private(p,1000,CGP_PRIVATE_JSON,"io.common-golf.interop-json-v1");
+    if(cgp_peer_draft(p)==CGP_DRAFT_3 && a->is_server) {
         cgp_bind_private(p,1001,CGP_PRIVATE_RAW,"io.common-golf.interop-raw-v1");
         cgp_bind_private(p,1002,CGP_PRIVATE_DATAGRAM,"io.common-golf.interop-datagram-v1");
         cgp_bind_private(p,1003,CGP_PRIVATE_JSON,"io.common-golf.open-connect-v1");
@@ -80,7 +80,7 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
         if(cgp_peer_draft(p)!=CGP_DRAFT_3)emit_fixtures(p,a,true);
     } else
     if(cgp_peer_draft(p)==CGP_DRAFT_3) {
-        if(a->listener) {
+        if(a->is_server) {
             cgp_publish(p,1,"{\"type\":\"shot\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"ball_speed_meters_per_second\":60.5,\"vertical_launch_angle_degrees\":12.5,\"horizontal_launch_angle_degrees\":-1.5,\"estimated\":[\"ball_speed_meters_per_second\"]}");
             cgp_publish(p,3,"{\"type\":\"club\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"club_speed_meters_per_second\":40}");
             cgp_publish(p,4,"{\"type\":\"device_status\",\"ready\":true,\"battery_percent\":75}");
@@ -90,7 +90,7 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
             cgp_publish(p,6,"{\"type\":\"simulator_state\",\"ready\":true,\"requested_capture_mode\":\"full\"}");
             cgp_publish(p,7,"{\"type\":\"result\",\"shot_uuid\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"accepted\":true,\"carry_distance_meters\":200}");
         }
-    } else if (a->listener) {
+    } else if (a->is_server) {
         char shot[512];
         snprintf(shot,sizeof(shot),"{\"type\":\"shot\",\"shot_number\":1,\"ball_speed_meters_per_second\":60.5,\"vertical_launch_angle_degrees\":12.5,\"horizontal_launch_angle_degrees\":-1.5,%s}",
             cgp_peer_draft(p)==CGP_DRAFT_1 ? "\"reduced_accuracy\":true" : "\"estimated\":[\"ball_speed_meters_per_second\"]");
@@ -109,7 +109,7 @@ static void connected(cgp_peer *p,const char *fingerprint,void *user) {
 static void message(cgp_peer *p,uint32_t ch,const char *json,size_t length,void *user) {
     app *a=user;
     fprintf(a->output,"{\"channel\":%u,\"message\":%.*s}\n",ch,(int)length,json); fflush(a->output); ++a->received;
-    if ((ch==2 || cgp_private_matches(p,ch,"io.common-golf.open-connect-v1")) && !a->listener) cgp_publish(p,ch,"{\"Code\":200,\"Message\":\"Shot received\"}");
+    if ((ch==2 || cgp_private_matches(p,ch,"io.common-golf.open-connect-v1")) && !a->is_server) cgp_publish(p,ch,"{\"Code\":200,\"Message\":\"Shot received\"}");
 }
 #ifdef CGP_HAVE_DNSSD
 static void discovered(const char *name,const struct sockaddr_in *address,void *user) {
@@ -141,7 +141,7 @@ int main(int argc,char **argv) {
         else return 2;
     }
     if (draft<1 || draft>3 || port<0 || port>65535 || duration<=0 || (strcmp(role,"listen") && strcmp(role,"connect") && strcmp(role,"discover"))) return 2;
-    app a={.listener=!strcmp(role,"listen"),.version=version};
+    app a={.is_server=!strcmp(role,"listen"),.version=version};
     if (fixtures) {
         FILE *f=fopen(fixtures,"rb");if(!f)return 1;fseek(f,0,SEEK_END);long size=ftell(f);rewind(f);
         char *text=malloc((size_t)size+1);if(!text)return 1;size_t n=fread(text,1,(size_t)size,f);fclose(f);text[n]=0;
@@ -159,7 +159,7 @@ int main(int argc,char **argv) {
 #else
     if (!strcmp(role,"discover") || advertise) {fputs("DNS-SD development library required\n",stderr);return 2;}
 #endif
-    cgp_options options={.role=a.listener ? CGP_LAUNCH_MONITOR : CGP_SIMULATOR,.draft=(cgp_draft)draft,.listener=a.listener,
+    cgp_options options={.role=a.is_server ? CGP_LAUNCH_MONITOR : CGP_SIMULATOR,.draft=(cgp_draft)draft,.is_server=a.is_server,
         .name="C reference",.identity_directory=identity,.callbacks={.connected=connected,.message=message,.contract=contract,.menu=menu,.raw_stream=raw,.datagram=datagram,.tick=tick},.user=&a};
     inet_pton(AF_INET,"127.0.0.1",&options.local_ip);
     cgp_engine *engine=cgp_create_options(&options); if (!engine) return 1;
@@ -170,7 +170,7 @@ int main(int argc,char **argv) {
         if (!discovery) return 1;
     }
 #endif
-    if (a.listener) printf("KEY %s\nREADY %u\n",cgp_identity(engine),cgp_port(engine));
+    if (a.is_server) printf("KEY %s\nREADY %u\n",cgp_identity(engine),cgp_port(engine));
     else {
         struct sockaddr_in remote={.sin_family=AF_INET,.sin_port=htons((uint16_t)port)};
         if (!port || inet_pton(AF_INET,host,&remote.sin_addr)!=1 || !cgp_connect_key(engine,&remote,"fixture",expected_key)) return 1;

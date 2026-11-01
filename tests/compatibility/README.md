@@ -35,7 +35,7 @@ mismatch fails without delivering messages.
 
 Each session exchanges messages on every standard channel and a custom
 JSON channel. Draft 3 sessions also test raw streams, datagrams, and
-listener key pinning. The runner checks authenticated fingerprints,
+server key pinning. The runner checks authenticated fingerprints,
 validates messages against the schemas, and compares them with the corpus.
 
 ```sh
@@ -74,5 +74,5 @@ instead of direct addresses.
 ## Discovery
 
 `discovery.py` defaults to draft 3. It resolves each advertiser's TXT record
-and checks its `key` against the listener identity. Pass `--draft 1` or
+and checks its `key` against the server identity. Pass `--draft 1` or
 `--draft 2` to test an earlier draft.

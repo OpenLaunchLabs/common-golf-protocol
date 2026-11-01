@@ -28,7 +28,7 @@ static bool cgp_contract_valid(const char *id) {
 bool cgp_bind_private(cgp_peer *p, uint32_t channel, cgp_private_kind kind, const char *contract) {
     if (!p || channel<1000 || !cgp_contract_valid(contract)) return false;
     if (p->engine->draft == CGP_DRAFT_3) {
-        if (!p->engine->listener || p->info_sent || strlen(contract)>128 || kind>CGP_PRIVATE_RAW_DATAGRAM) return false;
+        if (!p->engine->is_server || p->info_sent || strlen(contract)>128 || kind>CGP_PRIVATE_RAW_DATAGRAM) return false;
         for (const char *c=contract;*c;++c) if (!((*c>='a' && *c<='z') || (*c>='0' && *c<='9') || *c=='.' || *c=='-' || *c=='_')) return false;
     } else if (kind!=CGP_PRIVATE_JSON) return false;
     cgp_binding *b=cgp_find_binding(p,channel);

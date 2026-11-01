@@ -1,4 +1,4 @@
-"""Draft 3 wire identity, listener-menu, and connection-lifetime regressions."""
+"""Draft 3 wire identity, server-menu, and connection-lifetime regressions."""
 import asyncio
 from functools import partial
 import struct

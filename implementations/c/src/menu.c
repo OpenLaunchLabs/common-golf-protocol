@@ -66,7 +66,7 @@ static bool identifier(const char *s) {
     return true;
 }
 bool cgp_menu_receive(cgp_peer *p,const char *json,size_t length) {
-    if(p->engine->draft!=CGP_DRAFT_3 || p->engine->listener)return true;
+    if(p->engine->draft!=CGP_DRAFT_3 || p->engine->is_server)return true;
     const char *value=NULL,*end=NULL;
     cgp_binding parsed[CGP_MAX_BINDINGS]={0};unsigned count=0;
     bool valid=true;
@@ -116,7 +116,7 @@ bool cgp_menu_receive(cgp_peer *p,const char *json,size_t length) {
 char *cgp_menu_info(cgp_peer *p,const char *json) {
     cJSON *info=cJSON_Parse(json);
     if(!info)return NULL;
-    if(p->engine->listener) {
+    if(p->engine->is_server) {
         cJSON *entries=cJSON_CreateArray();
         for(unsigned i=0;i<CGP_MAX_BINDINGS;++i)if(p->bindings[i].channel) {
             cJSON *entry=cJSON_CreateObject();cJSON_AddNumberToObject(entry,"channel",p->bindings[i].channel);

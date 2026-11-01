@@ -87,7 +87,7 @@ typedef struct cgp_peer {
 struct cgp_engine {
     cgp_role role;
     cgp_draft draft;
-    bool listener;
+    bool is_server;
     cgp_callbacks callbacks;
     void *user;
     char name[64], fingerprint[65];

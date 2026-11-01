@@ -1,4 +1,4 @@
-"""Draft 3 exact contracts, immutable listener menus, and datagram framing."""
+"""Draft 3 exact contracts, immutable server menus, and datagram framing."""
 from dataclasses import dataclass
 from collections import deque
 import re
@@ -13,9 +13,10 @@ def valid_identifier(value):
 
 @dataclass(frozen=True)
 class Contract:
+    """Local contract; initiators are application roles, independent of QUIC roles."""
     identifier: str
     format: str = "json"
-    openers: frozenset = frozenset({"device", "sim", "controller"})
+    initiators: frozenset = frozenset({"device", "sim", "controller"})
     bidirectional: bool = False
     max_bytes: int = 65535
     allowed_fingerprints: object = None
@@ -25,9 +26,9 @@ class Contract:
             raise ValueError("invalid contract identifier or format")
         if type(self.max_bytes) is not int or not 0 < self.max_bytes <= 0xffffffff:
             raise ValueError("contract payload limit must be a positive uint32")
-        if not self.openers or not set(self.openers) <= {"device", "sim", "controller"}:
-            raise ValueError("unknown contract opener role")
-        object.__setattr__(self, "openers", frozenset(self.openers))
+        if not self.initiators or not set(self.initiators) <= {"device", "sim", "controller"}:
+            raise ValueError("unknown contract stream initiator role")
+        object.__setattr__(self, "initiators", frozenset(self.initiators))
         if self.allowed_fingerprints is not None:
             object.__setattr__(self, "allowed_fingerprints", frozenset(self.allowed_fingerprints))
 
@@ -35,7 +36,7 @@ class Contract:
         return self.allowed_fingerprints is None or fingerprint in self.allowed_fingerprints
 
 
-OPEN_CONNECT = Contract("io.common-golf.open-connect-v1", openers=frozenset({"device"}), bidirectional=True)
+OPEN_CONNECT = Contract("io.common-golf.open-connect-v1", initiators=frozenset({"device"}), bidirectional=True)
 
 
 def validate_menu(entries):
