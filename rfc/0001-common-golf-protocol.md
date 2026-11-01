@@ -33,8 +33,7 @@ endpoint can open a stream, and a stalled stream does not block other
 streams. Receivers can decline streams they do not use.
 
 CGP requires both endpoints to authenticate with Ed25519 raw public keys
-(RFC 7250). Each connection authenticates its peers and has its own access
-policy and streams. Standard messages use JSON with a four-byte channel
+(RFC 7250). Each connection authenticates its peers and has independent streams. Standard messages use JSON with a four-byte channel
 prefix per stream and a four-byte length prefix per message. Custom
 contracts can also use raw streams or QUIC datagrams.
 
@@ -69,7 +68,7 @@ peer can send data on the same stream without becoming its initiator.
 A server MUST accept more than one connection at a time and MUST NOT
 refuse or drop a connection because another exists. A client MUST be able
 to hold connections to more than one server at a time. Every connection
-has its own authenticated key, tier, open channels and custom-channel menu.
+has its own authenticated key, open channels and custom-channel menu.
 A shot retains its `shot_uuid` when sent to multiple peers or replayed after
 reconnection.
 
@@ -104,8 +103,8 @@ MAY skip the handshake and report the incompatibility. An unrecognized
 identifier can indicate that the client needs an update; a known but
 unsupported older identifier can indicate that the server needs one.
 
-`caps` is a comma-separated list of lowercase ASCII capabilities available
-to at least one tier:
+`caps` is a comma-separated list of lowercase ASCII capabilities the server
+can provide:
 
 | Value | Meaning | Channels |
 |---|---|---|
@@ -119,7 +118,7 @@ Clients MUST ignore values they do not know; values may be added without
 changing the ALPN. Clients MAY use `caps` to group, label or filter
 servers in a user interface, and MUST NOT use it to decide which channels
 to open or read. A server does not necessarily send every capability to
-every tier.
+every peer.
 
 A server whose `key`, `alpn` or `caps` value changes MUST re-announce its
 TXT record (RFC 6762, section 8.4).
@@ -152,8 +151,7 @@ X.509 certificates.
 The server MUST request the client's key and the client MUST present
 it. Each endpoint MUST verify the peer's proof of possession. A missing key,
 a key of another algorithm, or failed proof of possession MUST fail the
-handshake. Authenticated peers with unregistered keys receive the `maker`
-tier (section 4).
+handshake.
 
 RFC 7250 carries the key as DER-encoded SubjectPublicKeyInfo. The
 fingerprint is the underlying 32 public-key bytes. An implementation can
@@ -283,7 +281,7 @@ logging. Implementations MUST NOT use it to select protocol behavior.
 | Step | What happens |
 |---|---|
 | 1. Handshake | ALPN selects one draft. Both endpoints present and authenticate Ed25519 raw public keys (section 3.3). |
-| 2. Identity | The server maps the client's key to a tier. The client MUST match the advertised server key to the handshake key, or close before opening any channel (section 4). |
+| 2. Identity | The client MUST match the advertised server key to the handshake key, or close before opening any channel (section 4). |
 | 3. `info` | Each side's first stream is channel 0. The server's first `info` carries the custom-channel menu chosen for that peer (section 6.2). |
 | 4. Use | Each side opens the channels it owns; each receiver keeps or declines each stream. |
 
@@ -300,35 +298,26 @@ is validated, then keep or decline it. If the initial menu is invalid,
 custom channels are unavailable and held streams are declined with code 1.
 Custom datagrams that arrive before the menu are discarded.
 
-## 4. Trust
+## 4. Identity and access policy
 
 A peer's identity is its Ed25519 public key. Its fingerprint is the 32-byte
 key encoded as 64 lowercase hex characters, rather than a hash of the key or
 its SubjectPublicKeyInfo encoding. The same fingerprint identifies the key
 across transports and protocols.
 
-Each endpoint MAY keep a list of fingerprints, each with a tier:
-
-| Tier | Meaning |
-|---|---|
-| `internal` | The vendor's own software |
-| `developer` | A registered third party |
-| `maker` | Every authenticated peer whose key is not registered |
-
-An endpoint uses the peer's tier to decide which channels to send or read
-and which custom contracts to offer. For example, a device can provide shots
-to makers and additional club data to developers. An endpoint without a
-registration list treats all authenticated peers as makers and is
-conforming. Registration procedures are outside this specification; removing
-a fingerprint revokes its registered tier.
+**Application note:** Applications can restrict custom channels to known
+peer identities and tailor the channel menu for internal private
+communications, partnerships, tournaments or other purposes. Use the
+peer's authenticated fingerprint to select the contracts offered on each
+connection.
 
 Authentication proves possession of a private key. It does not establish
-that an unregistered peer is a physical device. A familiar device name with
+that a peer is a physical device. A familiar device name with
 an unrecognized fingerprint represents a new identity. An implementation
-with a registration list SHOULD notify the user of this change.
+that remembers peer identities SHOULD notify the user of this change.
 
 The advertised `key` (section 3.2) allows clients to label or filter
-discovered servers by tier before connecting. The advertisement is
+discovered servers using local policy before connecting. The advertisement is
 unauthenticated: a client MUST NOT treat it as authentication and MUST
 compare it with the handshake key. If the keys differ, the client MUST
 close the connection before opening any channel and report the server as
@@ -340,8 +329,8 @@ cannot hide a legitimate server.
 A key may identify an organization or product line rather than a single
 device. Multiple servers can present the same key; a client MUST NOT
 merge them or choose between them by key alone. Key rotation requires
-replacing the registered fingerprint. Expiration is a local registration
-policy.
+updating any local policy associated with the old fingerprint. Expiration
+is a local policy.
 
 Message authentication relies on the transport. CGP adds no per-message
 signatures, nonces or JSON canonicalization.
@@ -675,10 +664,10 @@ raw streams and datagrams. Endpoints implement contract definitions locally.
 Contract names do not negotiate behavior or determine whether the server
 sends or receives.
 
-An endpoint SHOULD offer and open custom channels only toward peers whose
-tier warrants it (section 4). Device configuration, such as selecting a
-marked or markerless ball, belongs in a vendor contract, typically on the
-vendor application's own connection. Channel 6 carries simulator state.
+Device configuration, such as
+selecting a marked or markerless ball, belongs in a vendor contract,
+typically on the vendor application's own connection. Channel 6 carries
+simulator state.
 
 ### 6.1 Contract identifiers
 
@@ -721,11 +710,10 @@ The server's first `info` carries the menu as a `contracts` array of
   65,535-byte limit.
 - An absent `contracts` field or an empty array defines an empty menu.
 
-The server chooses the menu according to the authenticated peer's tier and
-local policy before sending `info`. The menu is fixed for the connection:
-any later server `info` MUST describe the same mappings, regardless of
-order. Closing a stream does not release its channel number. Changing the
-menu requires reconnection.
+The server chooses the menu before sending `info`. The menu is fixed for
+the connection: any later server `info` MUST describe the same
+mappings, regardless of order. Closing a stream does not release its
+channel number. Changing the menu requires reconnection.
 
 A receiver MUST validate the whole menu before installing it. An invalid
 menu, or a later `info` that changes it, is malformed `info` (section 3.4,
