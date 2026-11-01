@@ -72,7 +72,7 @@
           }
         }
       },
-      "description": "Immutable listener menu. Protocol validation also rejects duplicate channels and non-integer JSON notation (fractions or exponents)."
+      "description": "Immutable server menu. Protocol validation also rejects duplicate channels and non-integer JSON notation (fractions or exponents)."
     },
     "reads_contracts": {
       "type": "array",
