@@ -1,85 +1,86 @@
 # Common Golf Protocol
 
-One connection between golf launch monitors, swing radars, control boxes, and
-simulator software, over QUIC. SI units spelled out in every field name.
-Discovery instead of IP addresses. Encrypted and authenticated by the
-transport, so no application-level crypto. Channels work like topics: one
-owner, one direction, no acknowledgements.
+Common Golf Protocol connects golf launch monitors, swing radars, and control
+boxes to simulator software over QUIC. It provides automatic device discovery,
+encrypted connections, and authentication. Measurement fields include their
+units in their names, and independent channels carry measurements, device
+status, and simulator commands.
 
-Status: draft 3 discussion, unreleased. Published draft 1 and draft 2 remain
-available as compatibility profiles.
+Draft 3 is in development. The reference implementations also support
+published drafts 1 and 2.
 
 ## Reference implementations
 
-| Implementation | Install/build | Transport |
+| Implementation | Build | Transport |
 |---|---|---|
 | [Python package](implementations/python/README.md) | `pip install ./implementations/python` | aioquic |
 | [Rust crate](implementations/rust/README.md) | `cargo build --manifest-path implementations/rust/Cargo.toml` | noq / rustls |
 | [C library](implementations/c/README.md) | CMake; also used by the ESP32 demo | ngtcp2 / wolfSSL |
 
-All three support drafts 1 and 2 and the unreleased
-[draft 3 proposal](implementations/DRAFT3.md) for interoperability testing.
-The Python package and Rust crate are not yet published. The
-[implementation guide](implementations/README.md#build-and-test) covers
-building and the [cross-language tests](tests/compatibility/README.md).
+All three libraries support drafts 1, 2, and 3 and are installed from this
+repository. See the [implementation guide](implementations/README.md#build-and-test)
+for build instructions and the [compatibility test guide](tests/compatibility/README.md)
+for cross-language testing.
 
-## Run the examples first
+## Run the examples
 
-Two terminals on one machine. Nothing takes an address or a port; the
-scripts find each other by discovery, which is the only way the protocol
-allows.
+Run the following commands from the repository root. Start the simulator and
+launch monitor in separate terminals; they connect through automatic discovery.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install ./implementations/python
 
-.venv/bin/python examples/sim.py            # terminal 1: a simulator
-.venv/bin/python examples/launch_monitor_minimum.py # terminal 2: the smallest launch monitor
+.venv/bin/python examples/sim.py                    # Terminal 1
+.venv/bin/python examples/launch_monitor_minimum.py # Terminal 2
 ```
 
-Swap the device for any of these, or run
-them all at once. Run two simulators too: every connection is independent
-and a device serves all of them.
+The examples use synthetic measurements. Multiple devices and simulators can
+run at the same time, with an independent connection for each pair.
 
-| Script | What it shows |
+| Device script in `examples/` | Features |
 |---|---|
-| `launch_monitor_minimum.py` | Three-number shots on channel 1. Shortest conforming device. |
-| `launch_monitor_full.py` | Device status, shot snapshots with spin and metadata, club data, computed flight. Gates club/flight by the simulator's trust tier. |
-| `launch_monitor_open_connect.py` | A GSPro Open Connect v1 device moved to QUIC. Uses the listener's Open Connect contract in draft 3, or channel 2 in drafts 1/2. |
-| `swing_speed_radar.py` | Club speed with no ball data. |
+| `launch_monitor_minimum.py` | Ball speed and launch angles on channel 1. |
+| `launch_monitor_full.py` | Device status, shot updates, spin, club data, and computed flight. Club and flight data are restricted to trusted simulators. |
+| `launch_monitor_open_connect.py` | GSPro Open Connect v1 messages over QUIC using the Open Connect custom contract. |
+| `swing_speed_radar.py` | Club speed without ball data. |
 | `control_box.py` | Virtual button presses. |
 
-To see trust tiers, print the simulator's fingerprint and list it:
+To enable trusted channels in the full launch monitor example, print the
+simulator's fingerprint:
 
 ```sh
 .venv/bin/python -c 'from common_golf import Identity; print(Identity(".cgp-identities/example-sim", "example-sim").fingerprint)'
-# put it in a copy of examples/fingerprints.example.json, then
+```
+
+Copy `examples/fingerprints.example.json` to `my-fingerprints.json`, add an
+entry keyed by the fingerprint with `"tier": "developer"`, and start the device:
+
+```sh
 .venv/bin/python examples/launch_monitor_full.py --trusted my-fingerprints.json
 ```
 
-The examples use the Python package in `implementations/python`, and their
-measurements are synthetic. They default to the draft 3 proposal; pass
-`--draft 1` or `--draft 2` to both ends for a published draft. Rust and C
-versions are in `examples/rust` and `examples/c`.
+The examples use draft 3 by default. Pass `--draft 1` or `--draft 2` to both
+endpoints to use an earlier draft. See also the [Rust](examples/rust/README.md)
+and [C](examples/c/README.md) examples.
 
-## Try ESP32 hardware
+## ESP32 hardware
 
-The [ESP-WROOM-32 demo](examples/esp32/README.md) builds three firmware roles:
-a synthetic launch monitor, a random control box, and a simulator that
-discovers both.
+The [ESP-WROOM-32 demo](examples/esp32/README.md) builds three firmware
+roles: a synthetic launch monitor, a random control box, and a simulator
+that discovers both.
 
-## Then read the spec
+## Specification
 
-[`rfc/0001-common-golf-protocol.md`](rfc/0001-common-golf-protocol.md) is
-the working draft 3 proposal. `schema/` holds its message schemas, with frozen
-draft 1 and draft 2 snapshots in separate directories.
+The [protocol specification](rfc/0001-common-golf-protocol.md) defines the
+transport, channels, and message formats. The [JSON Schemas](schema/README.md)
+cover draft 3 and include frozen copies for drafts 1 and 2.
 
-## Changing it
+## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has the two rules that keep this small,
-and the policy that everything here is written by people.
-[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) explains how to
-document private channels, with clearly marked placeholder examples.
+Read the [contribution guidelines](CONTRIBUTING.md) before proposing changes.
+Vendor custom contracts can be registered in the
+[private channel directory](KNOWN_PRIVATE_CHANNELS.md).
 
 ## License
 

@@ -1,47 +1,50 @@
 # Reference libraries
 
-Protocol libraries, separate from the applications in `examples/`.
+The reference libraries provide Common Golf Protocol transport and message
+handling for applications. Each library includes a diagnostic peer for the
+[compatibility tests](../tests/compatibility/README.md).
 
-- [Python](python/README.md): `common-golf-protocol` package on aioquic.
-- [Rust](rust/README.md): `common-golf-protocol` crate on noq/rustls.
-- [C](c/README.md): static library on ngtcp2/wolfSSL, shared with the
-  [ESP32 demo](../examples/esp32/README.md).
+- [Python](python/README.md): `common-golf-protocol` package using aioquic;
+  diagnostic command `cgp-python-peer`.
+- [Rust](rust/README.md): `common-golf-protocol` crate using noq and rustls;
+  diagnostic command `cgp-peer`.
+- [C](c/README.md): static library using ngtcp2 and wolfSSL, shared with the
+  [ESP32 demo](../examples/esp32/README.md); diagnostic command `cgp-peer`.
 
-Each library also builds a diagnostic peer for the compatibility tests:
-`cgp-python-peer`, and `cgp-peer` for Rust and C.
+For application examples, see [`examples/`](../examples/).
+
+## Supported drafts
 
 | ALPN | Protocol versions | Accuracy field |
 |---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | `shot.reduced_accuracy` |
 | `common-golf/draft-2` | 0.2.0 | `shot.estimated`, `club.estimated` |
-| `common-golf/draft-3` (proposal) | 0.3.0 | `shot.estimated`, `club.estimated` |
+| `common-golf/draft-3` | 0.3.0 | `shot.estimated`, `club.estimated` |
 
-The [RFC](../rfc/0001-common-golf-protocol.md) and [draft 3 profile](DRAFT3.md)
-describe the unreleased discussion proposal implemented here. Drafts 1 and 2
-remain separate compatibility profiles. Behavior follows the ALPN;
-`info.protocol_version` is informational.
+The negotiated ALPN determines protocol behavior; `info.protocol_version`
+is informational. Draft 3 uses mutual Ed25519 raw public keys and verifies
+the discovery key before application traffic. It supports listener menus
+for JSON, raw streams and datagrams, and identifies shot snapshots with
+UUIDv7. See the [RFC](../rfc/0001-common-golf-protocol.md) for the full
+specification.
 
-Draft 3 uses mutual Ed25519 raw public keys, requires the discovery TXT key
-and checks it before application traffic, and uses 5 s keep-alives with a 30 s
-idle timeout. All three libraries implement listener menus, custom JSON and
-Open Connect contracts, raw streams, datagrams, and UUIDv7 shot identities.
-Drafts 1/2 retain their 15 s / 90 s timing and private-channel behavior.
-The Rust transport keeps draft 3 and legacy TLS profiles in separate endpoint
-configurations; it does not offer both profiles in one handshake.
+Drafts 1 and 2 remain available for compatibility. They use X.509 identities,
+with the transport, private channel and shot rules defined by their
+respective drafts. Rust requires separate TLS configurations for draft 3
+and earlier drafts.
 
-Applications supply measurements, trust lists, and channel policy. Libraries
-enforce transport, menu, and shot-identity rules; full message-schema and
-cross-field validation remains in the test harness. Shot snapshots replace
-earlier snapshots for the same UUID and channel, without a `final` field.
+Applications supply measurements, trust lists and channel policies. The
+libraries enforce transport, menu and shot-identity rules. The test harness
+provides full schema and cross-field validation.
 
 ## Build and test
 
-Requirements: Python 3.9+ (CI uses 3.12), Rust 1.90+, CMake 3.16+, and a C11
-compiler. C dependencies are fetched at pinned, SHA-256-verified revisions.
-Native discovery needs Bonjour on macOS, or `libavahi-compat-libdnssd-dev` and
-a running Avahi daemon on Linux.
+Building and testing all three libraries requires Python 3.9+, Rust 1.90+,
+CMake 3.16+, and a C11 compiler. C dependencies are pinned and verified with
+SHA-256 checksums. Native discovery requires Bonjour on macOS, or
+`libavahi-compat-libdnssd-dev` and a running Avahi daemon on Linux.
 
-From the repository root:
+Run these commands from the repository root:
 
 ```sh
 # Setup
@@ -73,23 +76,22 @@ ctest --test-dir implementations/c/build --output-on-failure
 cargo package --locked --allow-dirty --manifest-path implementations/rust/Cargo.toml
 ```
 
-The Rust test suite includes a live mDNS advertise/browse test. The
-cross-language discovery tests need local multicast and are not run in CI:
+The Rust tests include a live mDNS test. The following cross-language
+discovery tests also require local multicast and run separately from CI:
 
 ```sh
 .venv/bin/python tests/compatibility/discovery.py
 .venv/bin/python tests/compatibility/reference_apps.py --discovery
 ```
 
-Reports go to `test-results/`. See the
-[compatibility tests](../tests/compatibility/README.md).
+Test reports are written to `test-results/`. The
+[compatibility test guide](../tests/compatibility/README.md) describes the
+coverage and runner options.
 
-CI (`.github/workflows/reference-implementations.yml`) also runs the ESP32 host
-tests and a Windows job that builds the Rust DLL and runs the
+The [CI workflow](../.github/workflows/reference-implementations.yml) also
+runs the ESP32 host tests. Its Windows job builds the Rust DLL and runs the
 [C FFI example](../examples/c-ffi/README.md) and a C# smoke test.
 
-## Updating dependencies
-
-After changing a transport dependency, re-run the build, test, and packaging
+After changing a transport dependency, rerun the build, test and packaging
 steps. After changing shared C or TLS configuration, also rebuild the ESP32
 firmware.

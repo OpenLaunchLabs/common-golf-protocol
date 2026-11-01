@@ -1,97 +1,89 @@
 # Contributing
 
-This protocol is deliberately small. The job of this document is to keep it
-that way without anyone having to argue about it.
+Common Golf Protocol prioritizes a small, interoperable core. Extensions
+should prove useful in deployed implementations before becoming standard.
 
-## Where things happen
+## Where to contribute
 
-| Want to | Go to |
+| Contribution | Location |
 |---|---|
-| Talk, ask, show something off | Discord |
-| Propose a change or report a problem | GitHub issue |
-| Fix a typo, a schema bug, an example | Pull request |
-| Change the spec | Issue first, pull request after it is accepted |
+| Questions, discussion, and demonstrations | Discord |
+| Problems and proposed changes | GitHub issue |
+| Typo corrections, schema fixes, and examples | Pull request |
+| Specification changes | Proposal issue, followed by a pull request after acceptance |
 
-Anything decided in Discord is written into an issue, or it did not happen.
+Record decisions from Discord in a GitHub issue before acting on them.
 
-## Two rules for changes
+## Requirements for changes
 
-**1. Running code first.** Nothing enters channels 9 to 999 until it has
-shipped on a private channel (1000 and up) and at least two independent
-parties use it the same way. Channels 1000 and up need nobody's permission.
-Ship there, then propose.
+New standard channels in the range 9–999 must first ship on a private
+channel (1000 or above), with at least two independent parties using them
+consistently. Private channels require no approval.
 
-**2. We argue about cost, not merit.** What a change forces on people who
-do not care about it decides how hard it is to get in.
+Changes are evaluated by their impact on existing implementations:
 
-| Change | Cost to everyone else | What it takes |
+| Change | Impact | Requirements |
 |---|---|---|
-| New optional field on an existing channel | None; receivers ignore unknown fields | Two implementers, unit spelled out in the name |
-| New optional channel | None; nobody has to read it | Shipped privately first, two parties |
-| New required field or a new MUST | Every implementation changes | A draft boundary and a written reason it cannot be optional |
-| Changing a meaning, a sign, or a unit | Breaks shipped devices | Does not happen. Add a new field or channel instead |
+| Optional field on an existing channel | Receivers ignore unknown fields | Two implementers; units included in the field name |
+| Optional channel | Receivers can decline the channel | Deployed privately first; two independent adopters |
+| Required field or new MUST requirement | Every implementation must change | A draft boundary and a written explanation of why the requirement cannot be optional |
+| Change to an existing meaning, sign, or unit | Breaks deployed implementations | Use a new field or channel instead |
 
-A private channel that three simulators read is the protocol working, not
-a failure to standardize. Private channels are listed in
-`KNOWN_PRIVATE_CHANNELS.md` so others can adopt them voluntarily.
+Custom contracts can remain private indefinitely. List them in
+[KNOWN_PRIVATE_CHANNELS.md](KNOWN_PRIVATE_CHANNELS.md) so other vendors can
+adopt them.
 
 ## Proposals
 
-Open an issue with the proposal template. It asks five things:
+Open an issue using the proposal template and include:
 
-1. What problem this solves, in one paragraph.
-2. Why no existing channel or field carries it.
-3. Who has implemented it privately, on which channel number.
-4. The exact field names, units spelled out, with one example message.
-5. What happens when a receiver ignores it.
+1. A brief description of the problem.
+2. Why existing channels or fields cannot address it.
+3. The private implementations and channel numbers already in use.
+4. Exact field names with units, plus an example message.
+5. The behavior when a receiver ignores the extension.
 
-Every proposal ends in one of three written outcomes: accepted for the next
-draft, stays private with a line in `KNOWN_PRIVATE_CHANNELS.md`, or
-declined with the rule above that it did not meet.
+Maintainers record one of three outcomes: acceptance for the next draft,
+continued private use with a directory entry, or rejection with a reference
+to the unmet requirement.
 
-## Drafts
+## Drafts and compatibility
 
-The spec changes only at draft boundaries, roughly every six to eight
-weeks. Between drafts the answer to everything is "open an issue, it will
-be looked at for the next cut." A change that is not additive, one that
-removes or renames a field or channel or changes a meaning, gets its own
-ALPN string (`common-golf/draft-2`), so peers on different strings fail at
-the handshake instead of mid-stream. Adding an optional field or channel
-does not. Every string has a row in section 3.8 of the RFC saying why it
-moved and which issues it resolved.
+Specification changes are released at draft boundaries, roughly every six
+to eight weeks. Proposals submitted between releases are considered for
+the next draft.
+
+A change that removes or renames a field or channel, or changes its meaning,
+requires a new ALPN string, such as `common-golf/draft-2`. This makes
+incompatible endpoints fail during the handshake. Adding an optional field
+or channel does not require a new ALPN string.
+
+Each ALPN string must have an entry in section 3.8 of the
+[RFC](rfc/0001-common-golf-protocol.md#38-versions) describing the reason
+for the change and the issues it resolves.
 
 ## Pull requests
 
-Welcome for: typos, schema fixes, example fixes, new examples, and the
-implementation of a proposal that has already been accepted in an issue.
+Pull requests may correct typos, fix schemas or examples, add examples, or
+implement an accepted proposal. Specification changes without an accepted
+proposal issue will be closed and referred to the proposal process.
 
-Not accepted: spec changes with no accepted issue behind them. They will be
-closed with a pointer to this section, not because the idea is bad but
-because the discussion belongs on the issue.
+Every pull request must keep `examples/sim.py` passing against every device
+script.
 
-Every pull request must keep `examples/sim.py` passing against every
-device script.
+## Authorship
 
-## Written by people
+Issues, pull requests, review comments, and Discord messages must be written
+by a person. Language-model-generated, summarized, or expanded text is not
+accepted. Spell checkers and grammar tools are permitted. Agents may run
+examples against devices, but their transcripts must not be submitted as
+comments.
 
-Issues, pull requests, review comments and Discord messages must be written
-by a person. Not generated by a language model and pasted, not summarized
-by one, not expanded by one. Spell checkers and grammar tools are fine.
-Using an agent to run the examples against your device is fine; posting
-its transcript as your comment is not.
-
-The reason is the same as the rest of this document. The protocol stays
-small because every change costs someone a few minutes of real thought,
-and a maintainer's time is the scarce resource here. Text that cost
-nothing to produce costs the same to read as text that cost an hour.
-
-This cannot be enforced by software. Maintainers will close anything that
-reads as generated, without further discussion, and repeat offenders lose
-access. If you are unsure whether your own writing will read that way,
-write less.
+Maintainers close submissions they judge to be generated without further
+discussion. Repeated violations result in loss of access.
 
 ## Maintainers
 
-A small number of named maintainers merge and decide. There is no vote.
-When a maintainer says no they cite a rule from this file; if no rule
-covers it, that is a gap in this file and gets fixed here first.
+Named maintainers decide which changes to accept and merge; decisions are
+not made by vote. Rejections must cite a rule in this document. If no rule
+applies, maintainers update these guidelines before deciding.

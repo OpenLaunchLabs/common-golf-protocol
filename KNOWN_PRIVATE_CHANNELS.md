@@ -1,21 +1,22 @@
 # Known private channels
 
-Channels 1000 and up belong to the two ends of a connection. Nothing here is
-part of the protocol. This list exists so that a private channel one vendor
-built can be adopted by another on purpose instead of by accident, and so a
-proposal to standardize one can point at who already uses it.
+Channels 1000 and above carry custom contracts agreed between the endpoints.
+This directory allows vendors to share those contracts and records adoption
+for future standardization proposals. Channel numbers are assigned per
+connection and are not registered here.
 
-To add a row, open a pull request with the name, owner, what the channel
-carries, and a link to its specification or a contact. In drafts 1/2, the
-`name` is what the opener sends in its first `{"type": "private", ...}`
-message. In the draft 3 proposal it is the contract identifier in the
-listener's first `info.contracts` menu (see
-[section 6 of the RFC](rfc/0001-common-golf-protocol.md#6-custom-channels-1000-and-up)).
-Channel numbers are assigned per connection, so none are listed.
+No vendor contracts are currently listed.
 
-The rows below are placeholders showing the format.
+## Register a contract
 
-| Name | Owner | What it carries | Spec or contact |
-|---|---|---|---|
-| `com.example.foo` | Foo | Foo messages | Foo specification |
-| `com.example.bar` | Bar | Bar messages | Bar specification |
+Open a pull request with the following information:
+
+- Contract identifier.
+- Owner or maintainer.
+- Description of the data exchanged.
+- Link to a specification or a contact.
+
+In draft 3, the identifier is the `contract` value in the listener's
+`info.contracts` menu. See [custom channels in the RFC](rfc/0001-common-golf-protocol.md#6-custom-channels-1000-and-up).
+In drafts 1 and 2, it is the `name` in the stream opener's first
+`{"type": "private", ...}` message.

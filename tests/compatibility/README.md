@@ -1,58 +1,78 @@
 # Compatibility tests
 
-Build the libraries first; see the
-[implementation guide](../../implementations/README.md#build-and-test). Run
-everything from the repository root. Reports go to `test-results/`.
+These tests validate message schemas and interoperability between the
+Python, Rust, and C implementations. Build the libraries using the
+[implementation guide](../../implementations/README.md#build-and-test), then
+run the tests from the repository root. Integration reports are written to
+`test-results/`.
 
-| Script | Checks |
+| Script | Coverage |
 |---|---|
-| `fixtures.py` | The [message corpus](../fixtures/conformance.json) validates against frozen draft 1/2 schemas and working draft 3 schemas, with datagram header vectors. |
-| `test_conformance.py` | Invalid messages fail the schema checks (pytest). |
-| `run.py` | Live QUIC between Python, Rust, and C peers. |
-| `adversarial.py` | Malformed and hostile streams against each library. |
-| `reference_apps.py` | `examples/sim.py` against each example device. |
-| `discovery.py` | DNS-SD between every advertiser/browser pair, defaulting to draft 3. Needs multicast; not run in CI. |
+| `fixtures.py` | Validates the [message corpus](../fixtures/conformance.json) against each draft's schemas and checks datagram headers. |
+| `test_conformance.py` | Tests schema acceptance and rejection, and validates JSON examples in the RFC. Run with pytest. |
+| `run.py` | Tests live QUIC connections between Python, Rust, and C peers. |
+| `adversarial.py` | Tests malformed streams and protocol violations against each library. |
+| `reference_apps.py` | Runs `examples/sim.py` against each example device. |
+| `discovery.py` | Tests DNS-SD between every advertiser/browser pair. Requires multicast and is not run in CI. |
 
-`schema_check.py` holds the schema and cross-field checks shared by these
-scripts.
+`schema_check.py` provides the shared schema and cross-field validation.
+Tests run on loopback or the local network; ESP32 hardware is outside their
+scope.
 
-Draft 3 discovery also resolves each advertiser's TXT record independently
-and checks its required key against the listener identity: nine browse checks
-and three key checks. Pass `--draft 1` or `--draft 2` for legacy discovery.
+## Schema validation
 
-## `run.py`
+```sh
+.venv/bin/python tests/compatibility/fixtures.py
+.venv/bin/python -m pytest tests/compatibility/test_conformance.py
+```
 
-Runs all nine ordered language pairs, including each language with itself.
-Each pair runs draft 1 with every 0.1.0/0.1.1 combination (4 sessions), draft 2
-and draft 3 (1 session each), and all six ordered draft mismatch directions,
-which must fail without delivering messages: 108 cases in total.
+## Cross-language interoperability
 
-Each session sends every standard channel and custom JSON. Drafts 1/2 use
-channel 2 for Open Connect; draft 3 uses a listener-menu contract and also
-exercises raw streams and datagrams. The runner checks authenticated
-fingerprints, validates messages against the applicable schemas, and compares
-them with the corpus. Draft 3 connectors pin the listener's advertised raw key.
+`run.py` tests all nine ordered language pairs, including each language
+with itself. It covers every combination of versions 0.1.0 and 0.1.1 on
+draft 1, plus drafts 2 and 3. It also verifies that every ordered draft
+mismatch fails without delivering messages.
+
+Each session exchanges messages on every standard channel and a custom
+JSON channel. Draft 3 sessions also test raw streams, datagrams, and
+listener key pinning. The runner checks authenticated fingerprints,
+validates messages against the schemas, and compares them with the corpus.
 
 ```sh
 .venv/bin/python tests/compatibility/run.py
 .venv/bin/python tests/compatibility/run.py --languages python,rust --drafts 2 --no-mismatch
 ```
 
-`--python`, `--rust`, and `--c` override the peer commands.
+Use `--python`, `--rust`, and `--c` to override the peer commands.
 
-## `adversarial.py`
+Draft 3 uses the following contract menu:
 
-For each language and draft: malformed and declined streams, duplicate
-ownership, truncated FIN, maximum-size and fragmented frames, non-finite
-numbers, reopening, multiple clients, and Open Connect replies. The nine
-language/draft combinations each run 14 checks.
+| Channel | Contract | Format |
+|---|---|---|
+| 1000 | `io.common-golf.interop-json-v1` | One framed JSON stream per direction |
+| 1001 | `io.common-golf.interop-raw-v1` | Independent unidirectional raw streams |
+| 1002 | `io.common-golf.interop-datagram-v1` | Datagrams |
+| 1003 | `io.common-golf.open-connect-v1` | Open Connect |
 
-## `reference_apps.py`
+Raw stream and datagram payloads include `00 ff 80 00 61 62 63` to detect
+text conversion and NUL-termination errors.
 
-Runs `examples/sim.py` with each of the five example devices on all three
-drafts (15 sessions), covering Open Connect replies, shot updates, and the
-trusted club and flight channels. `--discovery` connects through DNS-SD
+## Protocol error handling
+
+`adversarial.py` tests each language and draft for malformed and declined
+streams, duplicate channel ownership, truncated FIN, maximum-size and
+fragmented frames, non-finite numbers, stream reopening, multiple clients,
+and Open Connect replies.
+
+## Reference applications
+
+`reference_apps.py` runs the simulator with all five example devices on all
+three drafts. It covers Open Connect replies, shot updates, and trusted
+club and flight channels. Pass `--discovery` to connect through DNS-SD
 instead of direct addresses.
 
-All of these run on loopback. They don't cover real networks or ESP32
-hardware.
+## Discovery
+
+`discovery.py` defaults to draft 3. It resolves each advertiser's TXT record
+and checks its `key` against the listener identity. Pass `--draft 1` or
+`--draft 2` to test an earlier draft.

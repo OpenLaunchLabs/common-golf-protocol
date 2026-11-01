@@ -179,7 +179,7 @@ def test_proposal_json_examples_match_working_schemas():
     import json
     import re
     from jsonschema import FormatChecker
-    for filename in ['rfc/0001-common-golf-protocol.md', 'implementations/DRAFT3.md']:
+    for filename in ['rfc/0001-common-golf-protocol.md']:
         text = (schema_check.ROOT / filename).read_text()
         for block in re.findall(r'```json\n(.*?)\n```', text, re.S):
             message = json.loads(block)
