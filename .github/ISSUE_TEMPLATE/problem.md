@@ -1,13 +1,13 @@
 ---
 name: Problem
-about: Something in the spec, a schema, or an example is wrong or unclear
+about: Report an error or ambiguity in the specification, schemas, or examples
 labels: problem
 ---
 
 Write this yourself. Short is fine.
 
-**Where** (file and section, or script name):
+**Location** (file and section, or script name):
 
-**What it says or does:**
+**Current text or behavior:**
 
-**What it should say or do:**
+**Expected text or behavior:**

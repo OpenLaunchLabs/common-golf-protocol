@@ -1,21 +1,22 @@
 # C FFI example (experimental)
 
-A C program that calls the Rust crate through its C ABI (`cdylib`), for C#
-and Windows applications without a suitable QUIC library.
+This C program demonstrates the Rust crate's C ABI (`cdylib`), which also
+supports integration with C# and other languages that can call C functions.
 
 ## Scope
 
-- Drafts 2 and 3; the samples use draft 3.
-- Connector only: no listening or advertising.
-- Standard channels 0, 1 and 3 to 8, limited further by the endpoint's
-  role. `cgp_send` refuses other channels; incoming streams on them get
-  STOP_SENDING 1.
+- Supports drafts 2 and 3; this example uses draft 3.
+- Connects to discovered devices. Listening and advertising are not supported.
+- Supports standard channels 0, 1, and 3–8, subject to the endpoint's role.
+  `cgp_send` rejects other channels, and incoming streams on those channels
+  receive `STOP_SENDING` with error code 1.
 
-## Build (Windows)
+## Build on Windows
 
-Requires a Rust MSVC toolchain, Visual Studio C++ build tools, CMake and
-NASM (for aws-lc-rs; see its
+Install a Rust MSVC toolchain, Visual Studio C++ build tools, CMake, and
+NASM (required by aws-lc-rs; see its
 [Windows requirements](https://aws.github.io/aws-lc-rs/requirements/windows)).
+Run these commands from the repository root:
 
 ```powershell
 cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path implementations/rust/Cargo.toml
@@ -28,12 +29,11 @@ ctest --test-dir examples/c-ffi/build -C Release --output-on-failure
 
 On macOS or Linux, pass the built `.dylib` or `.so` as `CGP_RUST_LIBRARY`.
 
-The Windows CI job builds the x64 DLL, runs this program and a loopback
-QUIC test, runs the .NET 8 smoke test in `examples/csharp`, and uploads the
-DLL, import library, header and example as the `cgp-windows-x64-sdk`
-artifact.
+Windows CI builds the x64 DLL and runs this example, a loopback QUIC test,
+and the .NET 8 smoke test in `examples/csharp`. The `cgp-windows-x64-sdk`
+artifact contains the DLL, import library, header, and example.
 
-To run the wire test against a built example:
+To run the loopback QUIC test against a built example:
 
 ```sh
 CGP_C_EXAMPLE=/absolute/path/to/cgp-c-ffi cargo test --locked --manifest-path implementations/rust/Cargo.toml --test ffi -- --ignored
@@ -41,46 +41,61 @@ CGP_C_EXAMPLE=/absolute/path/to/cgp-c-ffi cargo test --locked --manifest-path im
 
 ## Usage
 
-- No arguments: a lifecycle smoke test.
-- `--discover`: browse DNS-SD for a bounded time. Each result is
-  `{name,addresses,properties}`; pass it unchanged to `cgp_connect`.
-- `<descriptor-json> <key-hex>`: connect to that peer, exchange standard
-  messages, and exit.
+| Arguments | Behavior |
+|---|---|
+| None | Run a lifecycle smoke test. |
+| `--discover` | Browse DNS-SD for one second and print device descriptors. |
+| `<descriptor-json> <key-hex>` | Connect to the device, exchange standard messages, and exit. |
+
+Each discovery result contains `name`, `addresses`, and `properties`. Pass
+the complete descriptor to `cgp_connect` with an independently trusted key.
 
 ## ABI
 
-[`cgp_rust.h`](../../implementations/rust/include/cgp_rust.h) is the
-reference. Functions are cdecl and take UTF-8 strings, fixed-width integers
-and opaque handles. They return `0` on success, `1` on poll timeout and
-`-1` on error. Error text is thread-local; read it immediately on the same
-thread. Rust panics are returned as errors.
+The ABI is defined in
+[`cgp_rust.h`](../../implementations/rust/include/cgp_rust.h). Functions use
+the cdecl calling convention, UTF-8 strings, fixed-width integers, and opaque
+handles. Status codes are `0` for success, `1` for a poll timeout, and `-1`
+for an error. Error text is thread-local; copy it immediately on the same
+thread. Rust panics are reported as errors.
 
-**Threading.** Calls block; use one worker thread per endpoint. Callbacks
-run only inside `cgp_discover` and `cgp_poll`, on the calling thread, and
-must not call back into the endpoint. Copy borrowed bytes, catch managed
-exceptions, and return quickly. In C#, keep delegates alive for the whole
-native call and wrap handles in `SafeHandle`.
+### Threading and memory
 
-**Limits.** One connection per endpoint, 1 to 16 addresses per
-`cgp_connect`, and send payloads of 1 to 65,535 bytes of valid JSON. The
-receive queue holds 128 events, so reliable traffic backs up when polling
-falls behind. Discover, poll and send timeouts must be 1 to 60,000 ms; a
-timed-out send closes the connection. A successful send means the
-transport accepted the data, not that the peer received it. Connect gives
-up after 10 seconds. There is no asynchronous cancel.
+Calls block. Serialize all calls for an endpoint, including destruction, on
+a worker thread. Callbacks run synchronously on the calling thread inside
+`cgp_discover` and `cgp_poll`; they must not call back into the endpoint.
+Copy borrowed bytes before returning, catch managed exceptions, and keep
+callback work short. In C#, keep delegates alive for the entire native call
+and wrap handles in `SafeHandle`.
 
-**Identity.** `cgp_connect` checks the peer's Ed25519 key against the pin
-you pass before sending info, and in draft 3 also requires the descriptor's
-`properties.key` to match. Get the pin from a trusted pairing step; the
-DNS-SD `key` is not authenticated. Fingerprints are lowercase hex of the
-raw 32-byte key; `cgp_peer_fingerprint` needs a buffer of at least 65
-bytes. Don't share an identity directory between processes; on Windows,
-protect it with ACLs.
+### Limits and timeouts
 
-## Not yet tested
+| Resource | Limit |
+|---|---|
+| Connections | One per endpoint |
+| Addresses in `cgp_connect` | 1–16 |
+| Send payload | 1–65,535 bytes of valid JSON |
+| Receive queue | 128 events |
+| Discovery, poll, and send timeouts | 1–60,000 ms |
+| Connection timeout | 10 seconds |
 
-- Managed callbacks under load, garbage-collector pressure, repeated
-  connect/dispose, Unity IL2CPP/AOT, and domain reload.
-- Clean Windows installs, DLL search paths, ARM64/x86, and static CRT.
-- LAN discovery across firewall profiles, VPNs, multiple adapters, IPv6
-  scope IDs, sleep/resume, and network changes.
+The receive queue applies backpressure when polling falls behind. A send
+timeout closes the connection. Successful sends confirm transport
+acceptance, not peer receipt. Asynchronous cancellation is not supported.
+
+### Identity
+
+`cgp_connect` verifies the peer's Ed25519 key against the supplied pin before
+sending `info`. Draft 3 also requires the descriptor's `properties.key` to
+match. Obtain the pin through trusted pairing; the DNS-SD `key` is
+unauthenticated.
+
+Fingerprints encode the raw 32-byte key as lowercase hexadecimal.
+`cgp_peer_fingerprint` requires a buffer of at least 65 bytes. Use a separate
+identity directory for each process and protect it with ACLs on Windows.
+
+## Validation scope
+
+Automated tests cover the ABI lifecycle, loopback QUIC, and .NET smoke test.
+Managed runtime stress, Unity, other Windows architectures, and LAN recovery
+have not been tested.

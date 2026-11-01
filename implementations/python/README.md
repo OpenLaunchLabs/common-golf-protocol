@@ -1,11 +1,21 @@
 # Python reference package
 
+The `common-golf-protocol` package provides an asyncio API for QUIC
+connections, discovery, identities and protocol messages. It supports
+draft 3 (0.3.0), draft 1 (0.1.0 and 0.1.1), and draft 2 (0.2.0).
+Both endpoints must select the same draft; an ALPN mismatch fails the
+handshake.
+
+## Install and run
+
+Install from the repository root:
+
 ```sh
 python -m pip install ./implementations/python
 ```
 
-Supports draft 3 (0.3.0), draft 1 (0.1.0, 0.1.1) and draft 2 (0.2.0). Both
-endpoints must choose the same draft; mismatched ALPNs fail the handshake.
+This listener advertises a launch monitor and sends a synthetic shot when
+a simulator connects:
 
 ```python
 import asyncio
@@ -30,71 +40,74 @@ async def main():
 asyncio.run(main())
 ```
 
-`role` is `device`, `controller` or `sim`; each role sends only on the
-channels it owns. A simulator finds peers with `discover()` and connects
-with `async with dial(peer, identity, factory, draft=...)`. Each connection
-gets its own `Connection` instance.
+Set `role` to `device`, `controller` or `sim`. Each role can send only on
+the channels it owns. A simulator discovers peers with `discover()` and
+connects using `async with dial(peer, identity, factory, draft=...)`. The
+factory creates a separate `Connection` instance for each connection.
 
-Override `on_connected`, `on_message(channel, message, stream_id)`,
-`on_declined`, `on_stream_error`, `on_stream_cancelled` (the peer reset a
-stream) and `on_disconnected` as needed.
+Handle received messages in `on_message(channel, message, stream_id)`.
+Additional callbacks report connection establishment (`on_connected`),
+declined channels (`on_declined`), stream errors (`on_stream_error`), peer
+stream resets (`on_stream_cancelled`) and disconnection (`on_disconnected`).
 
 ## Identity and trust
 
-Keys are stored with mode 0600. The fingerprint is the 32-byte Ed25519
+Identity keys are stored with mode 0600. The fingerprint is the 32-byte Ed25519
 public key in lowercase hex. In draft 3, `listen` advertises the DNS-SD
 `key`, and `dial` checks that it matches the handshake key before sending
-anything. The low-level `Identity.configuration(is_client=True, draft=3,
+application traffic. The low-level `Identity.configuration(is_client=True, draft=3,
 expected_key=...)` also requires the key.
 
-Pass `trusted={fingerprint: tier}` with tier `"internal"`, `"developer"` or
-`"maker"` (or `{"tier": ...}`, as in `examples/fingerprints.example.json`).
-Unknown peers and tiers are `maker`. Read `peer_tier` in `on_connected` to
-decide which channels to open.
+Configure trust with `trusted={fingerprint: tier}`, where `tier` is
+`"internal"`, `"developer"` or `"maker"`. Values may also be objects such as
+`{"tier": "internal"}`; see
+[`fingerprints.example.json`](../../examples/fingerprints.example.json).
+Unknown peers and unrecognized tiers default to `maker`. Use `peer_tier`
+in `on_connected` to select which channels to open.
 
 ## Channels and streams
 
-- Info is sent before any other channel opens.
+- The library sends info before opening other channels.
 - `publish(channel, message)` sends on the channel's outgoing stream.
 - `open`, `send` and `finish` manage streams directly. Sending on a stream
   the peer declined returns `False`.
-- `cancel(stream_id)` resets a stream with code 1, declining the channel
-  for the connection. `cancel(stream_id, code=0)` cancels just that stream,
-  for example one raw record.
+- `cancel(stream_id)` resets a stream with code 1 and declines the channel
+  for the connection. `cancel(stream_id, code=0)` cancels only that stream.
 - Each connection has a 256 KiB send budget (`max_send_buffer`). When it is
-  full, sends raise `BufferError`; yield and retry.
+  full, sends raise `BufferError`. Yield to the event loop before retrying.
 
-Messages are dictionaries, and unknown fields are kept. Create
+Messages are dictionaries that preserve unknown fields. For draft 3, create
 `shot_uuid = new_shot_uuid()` once per shot and reuse it for related
 channels, updates and replays. `Snapshots` tracks received state: it
-replaces whole shot snapshots per channel and UUID, and applies
-`device_status`/`simulator_state` patches. Pass `stream_open=True` when a
-new status stream starts.
+replaces shot snapshots by channel and UUID, and applies `device_status`
+and `simulator_state` patches. Pass `stream_open=True` when a new status
+stream starts.
 
 ## Custom channels (draft 3)
 
 Register `Contract` definitions on both peers with
 `contracts={definition.identifier: definition}`. A definition has a format
-(`json`, `raw`, `datagram` or `raw_datagram`), opener roles, direction, a
-payload bound, and optional `allowed_fingerprints`. `OPEN_CONNECT` is the
-built-in Open Connect contract.
+(`json`, `raw`, `datagram` or `raw_datagram`), opener roles, direction,
+payload limit, and optional `allowed_fingerprints`. `OPEN_CONNECT` provides
+the built-in Open Connect contract.
 
-The listener supplies `menu=[{"channel": 1000, "contract":
+Configure the listener with `menu=[{"channel": 1000, "contract":
 "com.example.diagnostics-v1"}]`, or a callable `menu(fingerprint, tier)`.
-On the connector, override `on_menu_ready` to start custom traffic;
+On the connector, start custom traffic in `on_menu_ready`.
 `channels_for_contract(name)` returns the handles for a contract. Standard
-channels don't wait for the menu.
+channels are available independently of the menu.
 
-Custom streams that arrive before the menu are held, with fixed QUIC flow
-credit, until it is validated; early custom datagrams are dropped. An
-invalid initial menu leaves custom channels unavailable.
+Custom streams received before the menu are held with fixed QUIC flow
+credit until the menu is validated. Custom datagrams received before the
+menu are dropped. An invalid initial menu leaves custom channels unavailable.
 
 - Open Connect replies use `send(stream_id, reply)` on the device's stream.
 - `open_raw` and `send_raw` write raw streams; `on_raw_stream` and
   `on_raw_data` receive them. At most 16 raw streams are active.
 - `send_datagram` and `on_datagram` carry sequenced datagrams. Queues hold
   16 entries per channel and 64 per connection and raise `BufferError` when
-  full; nothing queued is evicted, so drop samples before enqueueing.
+  full. Queued entries are retained; applications must discard unwanted
+  samples before enqueueing them.
   `datagram_payload_limit(channel)` is the current payload limit, excluding
   the 12-byte header; larger sends raise `ValueError`. Rejected sends
   consume no sequence number.
@@ -104,12 +117,12 @@ Drafts 1 and 2 configure private JSON channels on both endpoints with
 
 ## Diagnostic peer
 
-`cgp-python-peer` (or `python -m common_golf`) is the compatibility-test
-peer. It takes direct `--host`/`--port`, exchanges every standard channel,
-and writes received messages and events as NDJSON. It defaults to draft 3.
-Listeners print `KEY <hex>` and then `READY <port>`; draft 3 connectors
-need `--expected-key <hex>`. See `--help`. Products use discovery, not
-direct addresses.
+`cgp-python-peer` (or `python -m common_golf`) exchanges every standard
+channel and writes received messages and events as NDJSON. It defaults to
+draft 3 and accepts direct addresses through `--host` and `--port` for
+compatibility testing. Listeners print `KEY <hex>` followed by
+`READY <port>`; draft 3 connectors require `--expected-key <hex>`. Use
+`--help` for the full option list. Applications should use discovery.
 
 ## Development
 
@@ -119,10 +132,10 @@ python -m pytest implementations/python/tests
 python -m build implementations/python
 ```
 
-aioquic is pinned to 1.2.0. Raw-key negotiation, SPKI encoding, mutual-key
-requests, pending-menu flow credit and stream-lifetime checks use its
-private API, confined to `compat.py`, which refuses other versions.
-`compat.py` also works around two aioquic 1.2.0 bugs: send-only stream
-retirement and duplicate STOP_SENDING handling.
+aioquic is pinned to 1.2.0. The adapter in
+[`compat.py`](src/common_golf/compat.py) uses private aioquic APIs for raw
+public keys, menu flow control and stream lifecycle handling. It also
+includes compatibility fixes for stream retirement and duplicate
+STOP_SENDING events. The adapter rejects other aioquic versions.
 
 See the [Python examples](../../examples/python/README.md).
