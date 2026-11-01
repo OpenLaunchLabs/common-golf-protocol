@@ -42,48 +42,67 @@ contracts can also use raw streams or QUIC datagrams.
 
 ### 3.1 Roles
 
-Normally, the device or its desktop connector application listens, and the
-simulator connects. The simulator displays discovered devices for the user
-to select. Either side MAY take either QUIC role when a deployment needs it;
-channel ownership (section 5) is independent of the QUIC role.
+Connection roles use QUIC terminology ([RFC 9000, section
+1.2](https://www.rfc-editor.org/rfc/rfc9000.html#section-1.2)): the **client**
+initiates a QUIC connection, and the **server** accepts it. An **endpoint**
+is either participant; its **peer** is the other endpoint. Client and server
+below always refer to these QUIC roles.
 
-A listener MUST accept more than one connection at a time and MUST NOT
-refuse or drop a connection because another exists. A connector MUST be able
-to hold connections to more than one listener at a time. Every connection
+Device, controller and simulator are application roles. Normally, the device
+acts as the QUIC server, and the simulator acts as the QUIC client. The
+simulator displays discovered devices for the user to select. Either side
+MAY take either QUIC role when a deployment needs it; channel ownership
+(section 5) is independent of the QUIC role.
+
+A **bridge application** translates between CGP and another interface or
+protocol. A desktop bridge for a device acts on the device's behalf and
+normally accepts CGP connections as a QUIC server. The term bridge describes
+the application's purpose; its QUIC client or server role is determined
+separately for each connection.
+
+The **stream initiator** is the endpoint that opens a particular stream
+([RFC 9000, section 2.1](https://www.rfc-editor.org/rfc/rfc9000.html#section-2.1)).
+Either the QUIC client or server can initiate streams, subject to channel
+ownership and contract rules. On a bidirectional stream, the initiator's
+peer can send data on the same stream without becoming its initiator.
+
+A server MUST accept more than one connection at a time and MUST NOT
+refuse or drop a connection because another exists. A client MUST be able
+to hold connections to more than one server at a time. Every connection
 has its own authenticated key, tier, open channels and custom-channel menu.
 A shot retains its `shot_uuid` when sent to multiple peers or replayed after
 reconnection.
 
 ### 3.2 Discovery
 
-A listener MUST bind an ephemeral UDP port and MUST advertise itself with
+A server MUST bind an ephemeral UDP port and MUST advertise itself with
 DNS-SD over mDNS (RFC 6762, RFC 6763):
 
 | Record | Value |
 |---|---|
 | Service type | `_common-golf._udp.local.` |
 | Instance name | Human-readable device name |
-| SRV | The host and the port the listener actually bound |
+| SRV | The host and the port the server actually bound |
 | TXT | `key` (required); `vendor`, `model`, `serial`, `alpn`, `caps` (optional); all strings |
 
-`key` is the listener's fingerprint (section 4): the Ed25519 public key it
+`key` is the server's fingerprint (section 4): the Ed25519 public key it
 presents in the handshake, encoded as 64 lowercase hex characters. A
-listener MUST include it. A connector MUST reject a record whose `key` is
+server MUST include it. A client MUST reject a record whose `key` is
 missing or is not exactly 64 lowercase hex characters. The fingerprint is
-visible to the local network and can identify a returning listener.
+visible to the local network and can identify a returning server.
 
 `alpn` and `caps` provide information for the discovery interface. The
 negotiated ALPN and the `info` received after connection are authoritative.
-Connectors MUST ignore unknown TXT keys.
+Clients MUST ignore unknown TXT keys.
 
-`alpn` lists every ALPN string the listener accepts, comma-separated, each
+`alpn` lists every ALPN string the server accepts, comma-separated, each
 with the `common-golf/` prefix removed (`draft-3` for
-`common-golf/draft-3`). It MUST match what the handshake accepts. Connectors
+`common-golf/draft-3`). It MUST match what the handshake accepts. Clients
 compare entries exactly after restoring the prefix and MUST NOT parse them
-for version numbers. When no entry matches a supported string, the connector
+for version numbers. When no entry matches a supported string, the client
 MAY skip the handshake and report the incompatibility. An unrecognized
-identifier can indicate that the connector needs an update; a known but
-unsupported older identifier can indicate that the listener needs one.
+identifier can indicate that the client needs an update; a known but
+unsupported older identifier can indicate that the server needs one.
 
 `caps` is a comma-separated list of lowercase ASCII capabilities available
 to at least one tier:
@@ -96,13 +115,13 @@ to at least one tier:
 | `control` | Sends control input | 5 |
 | `simulation` | Runs the game and sends state and results | 6, 7 |
 
-Connectors MUST ignore values they do not know; values may be added without
-changing the ALPN. Connectors MAY use `caps` to group, label or filter
-listeners in a user interface, and MUST NOT use it to decide which channels
-to open or read. A listener does not necessarily send every capability to
+Clients MUST ignore values they do not know; values may be added without
+changing the ALPN. Clients MAY use `caps` to group, label or filter
+servers in a user interface, and MUST NOT use it to decide which channels
+to open or read. A server does not necessarily send every capability to
 every tier.
 
-A listener whose `key`, `alpn` or `caps` value changes MUST re-announce its
+A server whose `key`, `alpn` or `caps` value changes MUST re-announce its
 TXT record (RFC 6762, section 8.4).
 
 ```text
@@ -113,7 +132,7 @@ alpn=draft-2,draft-3
 caps=ball,club,control
 ```
 
-A connector MUST find listeners by browsing for the service type.
+A client MUST find servers by browsing for the service type.
 Implementations SHOULD NOT present an IP address, a port, or a scan control
 in a user interface. Users connect by selecting a discovered device.
 
@@ -130,7 +149,7 @@ Both endpoints MUST authenticate with Ed25519 raw public keys ([RFC
 negotiate `RawPublicKey`. Endpoints MUST NOT offer, accept, or fall back to
 X.509 certificates.
 
-The listener MUST request the connector's key and the connector MUST present
+The server MUST request the client's key and the client MUST present
 it. Each endpoint MUST verify the peer's proof of possession. A missing key,
 a key of another algorithm, or failed proof of possession MUST fail the
 handshake. Authenticated peers with unregistered keys receive the `maker`
@@ -141,7 +160,7 @@ fingerprint is the underlying 32 public-key bytes. An implementation can
 generate a key on first run and retain it across restarts. Authentication
 does not require a certificate authority or a clock.
 
-Listeners MUST NOT depend on TLS Server Name Indication (SNI). A listener
+Servers MUST NOT depend on TLS Server Name Indication (SNI). A server
 MUST accept an otherwise valid handshake with no SNI and MUST NOT require a
 particular SNI value. Discovery supplies the destination, ALPN selects the
 protocol, and the key supplies identity.
@@ -153,7 +172,7 @@ triggered by `control` messages.
 
 ### 3.4 Framing
 
-Every reliable stream begins with a channel ID written by the opener.
+Every reliable stream begins with a channel ID written by the stream initiator.
 Replies on the same bidirectional stream omit this prefix.
 
 ```
@@ -196,8 +215,8 @@ are the only exception (section 3.9). The sender MUST treat code 1 as a
 refusal for the rest of the connection: it MUST NOT reopen that channel on
 this connection, treat the decline as an error, or close the connection.
 
-A stream for a channel the opener does not own (section 5), or a second
-stream for a framed-JSON channel the opener already has open, is declined
+A stream for a channel the initiator does not own (section 5), or a second
+stream for a framed-JSON channel the initiator already has open, is declined
 the same way.
 
 | Code | Name | Sent as | Meaning |
@@ -230,16 +249,16 @@ QUIC orders bytes within a stream, not across streams (RFC 9000, section 2).
 - After a stream ends by FIN or reset, the sender MAY reopen the channel
   unless it received code 1 for that channel on this connection. Reopening
   does not change shot identity.
-- On a bidirectional stream, only the opener writes the channel prefix.
-  The responder writes directly in the contract's format.
+- On a bidirectional stream, only the stream initiator writes the channel
+  prefix. Its peer writes directly in the contract's format.
 
 ### 3.8 Versions
 
 The ALPN identifier selects the wire format. Before version 1.0, each draft
 has its own identifier, and drafts MAY introduce incompatible changes.
 
-A connector MAY offer several identifiers and a listener MAY accept several.
-TLS ALPN selects one according to the listener's preference. The selected
+A client MAY offer several identifiers and a server MAY accept several.
+TLS ALPN selects one according to the server's preference. The selected
 identifier applies to the whole connection; peers MUST NOT mix drafts within
 it. If no identifier is shared, the handshake fails.
 
@@ -251,7 +270,7 @@ change the identifier.
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
 | `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` on channel 1 replaced by `estimated` on channels 1 and 3 (#2) |
-| `common-golf/draft-3` | 0.3.0 | Unreleased | Mutual raw public keys, required discovery key, no SNI dependence, new timers, UUIDv7 shot identity without `final`, listener-menu custom channels replacing channel 2, renamed state channels with capture mode and lie |
+| `common-golf/draft-3` | 0.3.0 | Unreleased | Mutual raw public keys, required discovery key, no SNI dependence, new timers, UUIDv7 shot identity without `final`, server-menu custom channels replacing channel 2, renamed state channels with capture mode and lie |
 
 Version 1.0 uses `common-golf/1` and permits only additive changes under
 that identifier. Incompatible changes require `common-golf/2`.
@@ -264,18 +283,18 @@ logging. Implementations MUST NOT use it to select protocol behavior.
 | Step | What happens |
 |---|---|
 | 1. Handshake | ALPN selects one draft. Both endpoints present and authenticate Ed25519 raw public keys (section 3.3). |
-| 2. Identity | The listener maps the connector's key to a tier. The connector MUST match the advertised listener key to the handshake key, or close before opening any channel (section 4). |
-| 3. `info` | Each side's first stream is channel 0. The listener's first `info` carries the custom-channel menu chosen for that peer (section 6.2). |
+| 2. Identity | The server maps the client's key to a tier. The client MUST match the advertised server key to the handshake key, or close before opening any channel (section 4). |
+| 3. `info` | Each side's first stream is channel 0. The server's first `info` carries the custom-channel menu chosen for that peer (section 6.2). |
 | 4. Use | Each side opens the channels it owns; each receiver keeps or declines each stream. |
 
 After sending its own `info`, an endpoint MAY send standard traffic, and the
-listener MAY open offered custom channels, without waiting for the peer's
+server MAY open offered custom channels, without waiting for the peer's
 `info`. There is no additional selection, acknowledgement or ready exchange.
-A connector MUST receive and validate the listener's menu before opening a
+A client MUST receive and validate the server's menu before opening a
 custom channel or sending a custom datagram. Hints such as `reads` and
 `reads_contracts` MUST NOT become a startup prerequisite.
 
-A receiver MUST NOT decline a custom stream only because the listener's menu
+A receiver MUST NOT decline a custom stream only because the server's menu
 has not arrived. It MUST hold the stream unread until the menu arrives and
 is validated, then keep or decline it. If the initial menu is invalid,
 custom channels are unavailable and held streams are declined with code 1.
@@ -308,18 +327,18 @@ that an unregistered peer is a physical device. A familiar device name with
 an unrecognized fingerprint represents a new identity. An implementation
 with a registration list SHOULD notify the user of this change.
 
-The advertised `key` (section 3.2) allows connectors to label or filter
-discovered listeners by tier before connecting. The advertisement is
-unauthenticated: a connector MUST NOT treat it as authentication and MUST
-compare it with the handshake key. If the keys differ, the connector MUST
-close the connection before opening any channel and report the listener as
+The advertised `key` (section 3.2) allows clients to label or filter
+discovered servers by tier before connecting. The advertisement is
+unauthenticated: a client MUST NOT treat it as authentication and MUST
+compare it with the handshake key. If the keys differ, the client MUST
+close the connection before opening any channel and report the server as
 an unknown device. It MAY rediscover and retry once to account for stale
-discovery records after a key change. A connector SHOULD retain and try
+discovery records after a key change. A client SHOULD retain and try
 every advertisement claiming a given key so that a false advertisement
-cannot hide a legitimate listener.
+cannot hide a legitimate server.
 
 A key may identify an organization or product line rather than a single
-device. Multiple listeners can present the same key; a connector MUST NOT
+device. Multiple servers can present the same key; a client MUST NOT
 merge them or choose between them by key alone. Key rotation requires
 replacing the registered fingerprint. Expiration is a local registration
 policy.
@@ -336,7 +355,7 @@ messages.
 
 | ID | Name | Contract | Opened by | Flows | Stream | Max message | Needed for play |
 |---|---|---|---|---|---|---|---|
-| 0 | `info` | `io.common-golf.info-v1` | either | opener to peer | one-way | 65,535 | yes, first message |
+| 0 | `info` | `io.common-golf.info-v1` | either | stream initiator to peer | one-way | 65,535 | yes, first message |
 | 1 | `shot` | `io.common-golf.shot-v1` | device | device to sim | one-way | 65,535 | yes |
 | 2 | reserved | | | | | | |
 | 3 | `club` | `io.common-golf.club-v1` | device | device to sim | one-way | 65,535 | no |
@@ -416,7 +435,7 @@ Each endpoint sends `info` as its first message on its first stream.
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
 | `reads` | array of integer | | Standard channels (0, 1, 3 to 8) this side reads |
-| `contracts` | array of objects | | Listener's custom-channel menu; section 6.2 |
+| `contracts` | array of objects | | Server's custom-channel menu; section 6.2 |
 | `reads_contracts` | array of string | | Custom contract identifiers this side reads; section 6.2 |
 
 ```json
@@ -646,14 +665,14 @@ Trajectory point arrays require a custom contract.
 ## 6. Custom channels: 1000 and up
 
 Channel numbers below 1000 are defined or reserved by this specification.
-Numbers from 1000 onward are assigned per connection by the listener's menu.
-In its first `info`, the listener binds each number to an exact contract
+Numbers from 1000 onward are assigned per connection by the server's menu.
+In its first `info`, the server binds each number to an exact contract
 identifier. The mapping applies in both directions.
 
 A contract defines who opens streams, which way data flows, its maximum
 message size, and whether it uses framed JSON, raw streams, datagrams, or
 raw streams and datagrams. Endpoints implement contract definitions locally.
-Contract names do not negotiate behavior or determine whether the listener
+Contract names do not negotiate behavior or determine whether the server
 sends or receives.
 
 An endpoint SHOULD offer and open custom channels only toward peers whose
@@ -686,7 +705,7 @@ custom channel numbers. The new identifier does not alias the original.
 
 ### 6.2 The menu
 
-The listener's first `info` carries the menu as a `contracts` array of
+The server's first `info` carries the menu as a `contracts` array of
 `{channel, contract}` entries:
 
 ```json
@@ -702,9 +721,9 @@ The listener's first `info` carries the menu as a `contracts` array of
   65,535-byte limit.
 - An absent `contracts` field or an empty array defines an empty menu.
 
-The listener chooses the menu according to the authenticated peer's tier and
+The server chooses the menu according to the authenticated peer's tier and
 local policy before sending `info`. The menu is fixed for the connection:
-any later listener `info` MUST describe the same mappings, regardless of
+any later server `info` MUST describe the same mappings, regardless of
 order. Closing a stream does not release its channel number. Changing the
 menu requires reconnection.
 
@@ -714,24 +733,24 @@ code 2). No partial menu is installed and an established one is never
 replaced. An invalid initial menu leaves custom channels unavailable for the
 connection; standard channels are unaffected.
 
-The connector matches identifiers against the contracts it supports and uses
+The client matches identifiers against the contracts it supports and uses
 any subset of the offered channels in the directions each contract allows.
 Selection is local and requires no acknowledgement. In the example above, a
-connector selecting `com.example.auth-v2` uses channel 1001.
+client selecting `com.example.auth-v2` uses channel 1001.
 
-A connector MAY list the identifiers it reads in `reads_contracts` in its
+A client MAY list the identifiers it reads in `reads_contracts` in its
 own `info`. This list does not assign channel numbers or change the menu.
-The listener can use it to choose streams or open an offered stream and
+The server can use it to choose streams or open an offered stream and
 accept a decline.
 
 ### 6.3 Reliable streams
 
-The opener writes the four-byte channel ID once, then data in the contract's
-format. Framed-JSON contracts use section 3.4 framing and allow one stream
-per direction. Raw contracts add no envelope or length prefix, and MAY allow
-several concurrent streams on one channel. A bidirectional reply never
-repeats the prefix. A stream on an unbound channel, or one that violates its
-contract, is declined without closing the connection.
+The stream initiator writes the four-byte channel ID once, then data in the
+contract's format. Framed-JSON contracts use section 3.4 framing and allow
+one stream per direction. Raw contracts add no envelope or length prefix,
+and MAY allow several concurrent streams on one channel. A bidirectional
+reply never repeats the prefix. A stream on an unbound channel, or one that
+violates its contract, is declined without closing the connection.
 
 A separate raw stream per record supports large or indivisible payloads,
 such as camera frames or trajectories. Senders can reset obsolete streams;
@@ -781,7 +800,7 @@ Receivers discard datagrams that exceed their capacity.
 ### 6.5 Open Connect
 
 `io.common-golf.open-connect-v1` carries GSPro Open Connect v1 bodies over
-CGP. The listener assigns its channel number in the custom-channel menu; no
+CGP. The server assigns its channel number in the custom-channel menu; no
 number is reserved for Open Connect.
 
 | Property | Definition |
@@ -797,11 +816,13 @@ Field names, casing, units and `ShotNumber` are as Open Connect defines
 them. A device MAY add `shot_uuid`; it MUST then follow section 5's format
 and retention rules, and MUST equal the UUID of the same shot on channel 1.
 Replies do not echo the UUID. A simulator that accepts the stream MUST send
-the Open Connect replies. A simulator acting as the QUIC connector can list
+the Open Connect replies. A simulator acting as the QUIC client can list
 the identifier in `reads_contracts`.
 
-A bridge forwarding to GSPro on TCP 921 SHOULD strip `shot_uuid` unless the
-target GSPro version is known to accept unknown keys.
+A bridge receiving this contract and forwarding its bodies to GSPro on TCP
+921 takes the simulator application role on its CGP connection, independently
+of its QUIC client/server role. It SHOULD strip `shot_uuid` unless the target
+GSPro version is known to accept unknown keys.
 
 Channel 1 and this contract are independent and MAY be used together for the
 same shots. CGP defines no preference between them.

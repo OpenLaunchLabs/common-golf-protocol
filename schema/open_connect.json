@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Common Golf Protocol custom contract io.common-golf.open-connect-v1: Open Connect v1 bodies, plus one optional CGP field",
-  "description": "Payload schema for a listener-assigned custom channel in draft 3, not fixed channel 2. Open Connect v1 request bodies may include the optional CGP shot_uuid field; replies are unchanged. Drafts 1 and 2 carried Open Connect on channel 2.",
+  "description": "Payload schema for a server-assigned custom channel in draft 3, not fixed channel 2. Open Connect v1 request bodies may include the optional CGP shot_uuid field; replies are unchanged. Drafts 1 and 2 carried Open Connect on channel 2.",
   "oneOf": [
     {
       "type": "object",
