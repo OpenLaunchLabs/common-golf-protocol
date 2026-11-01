@@ -31,7 +31,7 @@ int main(int argc,char **argv) {
     cgp_demo_app app={.simulator=!strcmp(role,"simulator")};
     if(app.simulator && !discover){fputs("simulator requires --discover <device name>\n",stderr);return 2;}
     cgp_options options={.role=app.simulator ? CGP_SIMULATOR : CGP_LAUNCH_MONITOR,
-        .draft=CGP_DRAFT_3,.listener=!app.simulator,.identity_directory=identity,
+        .draft=CGP_DRAFT_3,.is_server=!app.simulator,.identity_directory=identity,
         .name=name,.callbacks=cgp_demo_callbacks(),.user=&app};
     cgp_engine *engine=cgp_create_options(&options);if(!engine)return 1;
     setvbuf(stdout,NULL,_IOLBF,0);signal(SIGTERM,stop);signal(SIGINT,stop);

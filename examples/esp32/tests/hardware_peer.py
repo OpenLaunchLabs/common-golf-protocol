@@ -270,7 +270,7 @@ class ControlFixture(Tracked):
 
 
 async def listen(args, run, identity_dir):
-    listeners = []
+    servers = []
     for label, cls in (("hardware-test-launch", LaunchFixture), ("hardware-test-control", ControlFixture)):
         def factory(*positional, cls=cls, label=label, **keywords):
             return cls(*positional, run=run, label=label, role="controller" if cls is ControlFixture else "device",
@@ -282,17 +282,17 @@ async def listen(args, run, identity_dir):
             async with cg.listen(label, identity, factory, draft=cg.Draft.THREE, properties={"vendor": "CGP hardware test", "model": label}):
                 await asyncio.Event().wait()
         task = asyncio.create_task(serve_fixture())
-        listeners.append(task)
+        servers.append(task)
     print(f"LISTENING for ESP32 simulator for {args.duration:g} seconds via {cg.SERVICE}", flush=True)
     print("WORKLOAD_CONFIG " + json.dumps({"shot_interval_seconds": args.shot_interval,
           "control_interval_seconds": args.control_interval, "quiet_after_seconds": args.quiet_after},
           sort_keys=True), flush=True)
     try:
         await run.observe(args.duration)
-        for task in listeners:
+        for task in servers:
             if task.done():
                 task.result()
-                raise AssertionError("Fixture listener stopped unexpectedly")
+                raise AssertionError("Fixture server stopped unexpectedly")
         for label, required in (("hardware-test-launch", {0, 6, 7}),
                                 ("hardware-test-control", {0, 6})):
             peers = [p for p in run.peers if p.label == label and p.was_connected]
@@ -316,9 +316,9 @@ async def listen(args, run, identity_dir):
         print("PASS hardware simulator: discovered both fixtures, held two connections, sent state/results", flush=True)
     finally:
         await run.cleanup()
-        for task in listeners:
+        for task in servers:
             task.cancel()
-        await asyncio.gather(*listeners, return_exceptions=True)
+        await asyncio.gather(*servers, return_exceptions=True)
 
 
 async def find_board(args):
@@ -334,7 +334,7 @@ async def find_board(args):
                                  + ", ".join(item.name for item in candidates))
         if candidates:
             return candidates[0]
-    raise AssertionError("No matching ESP32 listener found through DNS-SD")
+    raise AssertionError("No matching ESP32 server found through DNS-SD")
 
 
 async def probe(args, run, identity_dir):

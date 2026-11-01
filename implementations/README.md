@@ -13,6 +13,15 @@ handling for applications. Each library includes a diagnostic peer for the
 
 For application examples, see [`examples/`](../examples/).
 
+Connection roles follow QUIC: a client initiates a connection and a server
+accepts it. Either endpoint can initiate streams; a stream initiator's peer
+can reply on the same bidirectional stream. Device, controller and simulator
+are separate application roles. See [roles in the RFC](../rfc/0001-common-golf-protocol.md#31-roles),
+including the role of a desktop bridge application.
+
+Diagnostic peers use `--role listen` to act as a QUIC server and
+`--role connect` to act as a QUIC client.
+
 ## Supported drafts
 
 | ALPN | Protocol versions | Accuracy field |
@@ -23,7 +32,7 @@ For application examples, see [`examples/`](../examples/).
 
 The negotiated ALPN determines protocol behavior; `info.protocol_version`
 is informational. Draft 3 uses mutual Ed25519 raw public keys and verifies
-the discovery key before application traffic. It supports listener menus
+the discovery key before application traffic. It supports server menus
 for JSON, raw streams and datagrams, and identifies shot snapshots with
 UUIDv7. See the [RFC](../rfc/0001-common-golf-protocol.md) for the full
 specification.

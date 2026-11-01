@@ -45,7 +45,7 @@ int main(void) {
     assert(cgp_private_matches(&escaped,UINT32_MAX,"com.example.json-v1"));
     cgp_peer nul={.engine=&e};assert(receive(&nul,"{\"contracts\\u0000suffix\":123}"));
     assert(!cgp_channel_contract(&nul,1000));
-    e.listener=true;cgp_peer server={.engine=&e};assert(cgp_bind_private(&server,1000,CGP_PRIVATE_JSON,"com.example.json-v1"));
+    e.is_server=true;cgp_peer server={.engine=&e};assert(cgp_bind_private(&server,1000,CGP_PRIVATE_JSON,"com.example.json-v1"));
     char *json=cgp_menu_info(&server,"{\"type\":\"info\",\"name\":\"test\"}");assert(json && strstr(json,"contracts"));free(json);
     server.info_sent=true;assert(!cgp_bind_private(&server,1001,CGP_PRIVATE_RAW,"com.example.raw-v1"));
     char uuid[37];assert(cgp_shot_uuid(1,uuid));assert(strlen(uuid)==36 && uuid[14]=='7' && strchr("89ab",uuid[19]));assert(!cgp_shot_uuid(UINT64_MAX,uuid));

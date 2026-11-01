@@ -208,7 +208,7 @@ python3 -m venv .venv
 | `tests/integration/test_c_python_interop.py` | Draft 3 firmware roles together, plus draft 2 Python interoperability, concurrent connections, and stream errors. |
 | `tests/test_analyze_cpu.py` | CPU log analyzer. |
 
-The `cgp_host` executable defaults to draft 3 and accepts connector arguments
+The `cgp_host` executable defaults to draft 3 and accepts client arguments
 as `PORT KEY` pairs. Use `cgp_host_draft2` for draft 2. `mock_samples` defaults
 to draft 3; pass `1` or `2` for earlier schema sets.
 

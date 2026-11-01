@@ -108,7 +108,7 @@ async def run(args):
             if 1002 in self._bindings:
                 self._datagram_task = asyncio.create_task(self.repeat_datagrams())
         async def repeat_datagrams(self):
-            # Early listener datagrams can legally overtake info and be dropped.
+            # Early server datagrams can legally overtake info and be dropped.
             for _ in range(5):
                 self.send_datagram(1002, PAYLOAD)
                 await asyncio.sleep(.1)
@@ -173,7 +173,7 @@ def main():
     parser.add_argument("--output")
     parser.add_argument("--identity")
     parser.add_argument("--advertise")
-    parser.add_argument("--expected-key", help="advertised listener Ed25519 key; required by draft 3")
+    parser.add_argument("--expected-key", help="advertised server Ed25519 key; required by draft 3")
     parser.add_argument("--fixtures")
     parser.add_argument("--duration", type=float, default=3)
     args = parser.parse_args()

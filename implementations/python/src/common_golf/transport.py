@@ -50,7 +50,7 @@ class Connection(QuicConnectionProtocol):
         if max_send_buffer <= 0:
             raise ValueError("send buffer bound must be positive")
         self.max_send_buffer = max_send_buffer
-        self._listener = not self._quic.configuration.is_client
+        self._is_server = not self._quic.configuration.is_client
         self.expected_key = expected_key or getattr(self._quic.configuration, "_cgp_expected_key", None)
         self.contracts = dict(contracts or {})
         if any(name != contract.identifier for name, contract in self.contracts.items()):
@@ -58,7 +58,7 @@ class Connection(QuicConnectionProtocol):
         if self.draft != Draft.THREE and (contracts or menu is not None):
             raise ValueError("menus require draft 3")
         if self.draft == Draft.THREE and private_channels:
-            raise ValueError("draft 3 uses listener menu contracts")
+            raise ValueError("draft 3 uses server menu contracts")
         self._menu_option = menu
         self._menu = None
         self._menu_ready = False
@@ -112,9 +112,9 @@ class Connection(QuicConnectionProtocol):
                 raise ValueError("channel was declined for this connection")
             if channel >= 1000:
                 if not self._menu_ready or contract is None:
-                    raise ValueError("custom channel is not available in the listener menu")
-                if self.role not in contract.openers or contract.format == "datagram":
-                    raise ValueError("contract does not permit this stream opener")
+                    raise ValueError("custom channel is not available in the server menu")
+                if self.role not in contract.initiators or contract.format == "datagram":
+                    raise ValueError("contract does not permit this stream initiator")
                 if bidirectional is None:
                     bidirectional = contract.bidirectional
                 if bidirectional != contract.bidirectional:
@@ -222,7 +222,7 @@ class Connection(QuicConnectionProtocol):
         contract = self._bindings.get(channel) if self.draft == Draft.THREE else None
         if self.draft == Draft.THREE and channel >= 1000:
             remote_role = "sim" if self.role in ("device", "controller") else "device"
-            wanted = (contract is not None and remote_role in contract.openers
+            wanted = (contract is not None and remote_role in contract.initiators
                       and contract.format != "datagram" and bool(sid & 2) != contract.bidirectional)
             state.raw = contract is not None and contract.format in ("raw", "raw_datagram")
             if state.raw and sum(s.raw and not s.rejected for s in self._streams.values()) > 16:
@@ -249,9 +249,9 @@ class Connection(QuicConnectionProtocol):
         self._validate_custom_identity(channel, message)
         if channel == 0:
             self._validate_info_hints(message)
-            if self._listener and self._menu is not None:
+            if self._is_server and self._menu is not None:
                 if validate_menu(message.get("contracts", [])) != self._menu:
-                    raise ProtocolError("listener menu is fixed for the connection")
+                    raise ProtocolError("server menu is fixed for the connection")
 
     def _install_menu(self, message):
         if self._menu_failed:
@@ -259,7 +259,7 @@ class Connection(QuicConnectionProtocol):
         try:
             mapping = validate_menu(message.get("contracts", []))
             if self._menu is not None and mapping != self._menu:
-                raise ProtocolError("listener menu is fixed for the connection")
+                raise ProtocolError("server menu is fixed for the connection")
         except ProtocolError:
             if self._menu is None:
                 self._menu_failed = True
@@ -294,7 +294,7 @@ class Connection(QuicConnectionProtocol):
             self._validate_custom_identity(channel, message)
             if channel == 0:
                 self._validate_info_hints(message)
-                if not self._listener:
+                if not self._is_server:
                     self._install_menu(message)
         self.on_message(channel, message, sid)
 
@@ -317,7 +317,7 @@ class Connection(QuicConnectionProtocol):
         return self._menu_ready and not self._menu_failed
 
     def channels_for_contract(self, identifier):
-        """Supported handles for an exact identifier, after the listener menu arrives."""
+        """Supported handles for an exact identifier, after the server menu arrives."""
         return sorted(channel for channel, contract in self._bindings.items() if contract.identifier == identifier)
 
     def open_raw(self, channel):
@@ -340,7 +340,7 @@ class Connection(QuicConnectionProtocol):
     def send_datagram(self, channel, payload):
         contract = self._bindings.get(channel)
         if (not self._menu_ready or contract is None or contract.format not in ("datagram", "raw_datagram")
-                or self.role not in contract.openers or channel in self._declined_channels):
+                or self.role not in contract.initiators or channel in self._declined_channels):
             raise ValueError("channel has no writable datagram contract")
         payload = bytes(payload)
         limit = self.datagram_payload_limit(channel)
@@ -377,11 +377,11 @@ class Connection(QuicConnectionProtocol):
                 return
             if self.draft == Draft.THREE:
                 if (self.peer_fingerprint is None or not compat.remote_supports_datagrams(self._quic)
-                        or (not self._listener and self.peer_fingerprint != self.expected_key)):
+                        or (not self._is_server and self.peer_fingerprint != self.expected_key)):
                     self.close(error_code=0x12a, reason_phrase="draft 3 identity/key/datagram requirement failed")
                     return
             self.peer_tier = tier_of(self.peer_fingerprint, self.trusted)
-            if self.draft == Draft.THREE and self._listener:
+            if self.draft == Draft.THREE and self._is_server:
                 entries = self._menu_option(self.peer_fingerprint, self.peer_tier) if callable(self._menu_option) else self._menu_option
                 if entries is not None:
                     self.info["contracts"] = entries
@@ -389,7 +389,7 @@ class Connection(QuicConnectionProtocol):
                 self._bindings = {channel: self.contracts[name] for channel, name in self._menu.items()
                                   if name in self.contracts and self.contracts[name].permits(self.peer_fingerprint)}
                 if len(self._bindings) != len(self._menu):
-                    self.close(error_code=2, reason_phrase="listener offered unsupported or unauthorized contract")
+                    self.close(error_code=2, reason_phrase="server offered unsupported or unauthorized contract")
                     return
                 self._menu_ready = True
             self._application_ready = True
@@ -397,7 +397,7 @@ class Connection(QuicConnectionProtocol):
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
             self._cleanup_task = asyncio.create_task(self._cleanup())
             self.on_connected()
-            if self.draft == Draft.THREE and self._listener:
+            if self.draft == Draft.THREE and self._is_server:
                 self.on_menu_ready()
         elif isinstance(event, DatagramFrameReceived):
             if self.draft != Draft.THREE or not self._menu_ready:
@@ -409,7 +409,7 @@ class Connection(QuicConnectionProtocol):
             contract = self._bindings.get(channel)
             remote_role = "sim" if self.role in ("device", "controller") else "device"
             if (contract and contract.format in ("datagram", "raw_datagram")
-                    and remote_role in contract.openers and len(payload) <= contract.max_bytes):
+                    and remote_role in contract.initiators and len(payload) <= contract.max_bytes):
                 self.on_datagram(channel, sequence, payload)
         elif isinstance(event, StreamDataReceived):
             sid = event.stream_id
@@ -544,7 +544,7 @@ class Connection(QuicConnectionProtocol):
         """Transport closed."""
 
     def on_menu_ready(self):
-        """Listener menu is fixed; supported custom channels can now be opened."""
+        """Server menu is fixed; supported custom channels can now be opened."""
     def on_raw_stream(self, channel, stream_id, bidirectional):
         """Incoming bounded raw stream; chunks follow through on_raw_data."""
     def on_raw_data(self, channel, stream_id, payload, end_stream):

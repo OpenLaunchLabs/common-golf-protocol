@@ -1,4 +1,4 @@
-//! Draft 3 immutable listener menus and locally registered contract definitions.
+//! Draft 3 immutable server menus and locally registered contract definitions.
 use crate::Role;
 use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,9 @@ pub enum Format {
     Datagram,
     RawDatagram,
 }
+/// Application roles permitted to initiate streams, independent of the QUIC role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Opener {
+pub enum StreamInitiator {
     Either,
     Device,
     Simulator,
@@ -27,7 +28,7 @@ pub enum Opener {
 pub struct Contract {
     pub identifier: String,
     pub format: Format,
-    pub opener: Opener,
+    pub initiator: StreamInitiator,
     pub bidirectional: bool,
 }
 impl Contract {
@@ -35,7 +36,7 @@ impl Contract {
         Self {
             identifier: identifier.into(),
             format,
-            opener: Opener::Either,
+            initiator: StreamInitiator::Either,
             bidirectional: false,
         }
     }
@@ -43,24 +44,24 @@ impl Contract {
         Self {
             identifier: OPEN_CONNECT.into(),
             format: Format::Json,
-            opener: Opener::Device,
+            initiator: StreamInitiator::Device,
             bidirectional: true,
         }
     }
     pub fn opens(&self, role: Role) -> bool {
-        self.opener == Opener::Either
-            || match self.opener {
-                Opener::Device => matches!(role, Role::Device | Role::DeviceController),
-                Opener::Simulator => role == Role::Simulator,
-                Opener::Either => true,
+        self.initiator == StreamInitiator::Either
+            || match self.initiator {
+                StreamInitiator::Device => matches!(role, Role::Device | Role::DeviceController),
+                StreamInitiator::Simulator => role == Role::Simulator,
+                StreamInitiator::Either => true,
             }
     }
     pub fn reads(&self, role: Role) -> bool {
-        self.opener == Opener::Either
-            || match self.opener {
-                Opener::Device => role == Role::Simulator,
-                Opener::Simulator => matches!(role, Role::Device | Role::DeviceController),
-                Opener::Either => true,
+        self.initiator == StreamInitiator::Either
+            || match self.initiator {
+                StreamInitiator::Device => role == Role::Simulator,
+                StreamInitiator::Simulator => matches!(role, Role::Device | Role::DeviceController),
+                StreamInitiator::Either => true,
             }
     }
 }
@@ -137,14 +138,14 @@ pub(crate) enum MenuStatus {
     Invalid,
 }
 pub(crate) struct State {
-    listener: bool,
+    is_server: bool,
     contracts: HashMap<String, Contract>,
     mapping: Mutex<Option<BTreeMap<u32, String>>>,
     status: watch::Sender<MenuStatus>,
     pub declined: Mutex<HashSet<u32>>,
 }
 impl State {
-    pub fn new(listener: bool, contracts: Vec<Contract>, info: &Value) -> Result<Self> {
+    pub fn new(is_server: bool, contracts: Vec<Contract>, info: &Value) -> Result<Self> {
         let mut registry = HashMap::new();
         for contract in contracts {
             ensure!(
@@ -154,7 +155,7 @@ impl State {
             if contract.identifier == OPEN_CONNECT {
                 ensure!(
                     contract.format == Format::Json
-                        && contract.opener == Opener::Device
+                        && contract.initiator == StreamInitiator::Device
                         && contract.bidirectional,
                     "invalid Open Connect contract definition"
                 );
@@ -166,7 +167,7 @@ impl State {
                 "duplicate contract definition"
             );
         }
-        let mapping = if listener {
+        let mapping = if is_server {
             Some(menu(info)?)
         } else {
             menu(info)?;
@@ -175,14 +176,14 @@ impl State {
         if let Some(mapping) = &mapping {
             ensure!(
                 mapping.values().all(|id| registry.contains_key(id)),
-                "listener offered unregistered contract"
+                "server offered unregistered contract"
             );
         }
         Ok(Self {
-            listener,
+            is_server,
             contracts: registry,
             mapping: Mutex::new(mapping),
-            status: watch::channel(if listener {
+            status: watch::channel(if is_server {
                 MenuStatus::Ready
             } else {
                 MenuStatus::Pending
@@ -195,13 +196,13 @@ impl State {
         let offered = match menu(info) {
             Ok(m) => m,
             Err(e) => {
-                if !self.listener && self.status.borrow().eq(&MenuStatus::Pending) {
+                if !self.is_server && self.status.borrow().eq(&MenuStatus::Pending) {
                     self.status.send_replace(MenuStatus::Invalid);
                 }
                 return Err(e);
             }
         };
-        if self.listener {
+        if self.is_server {
             return Ok(());
         }
         let mut mapping = self.mapping.lock().unwrap();
@@ -209,7 +210,7 @@ impl State {
             bail!("initial menu was invalid");
         }
         if let Some(existing) = mapping.as_ref() {
-            ensure!(*existing == offered, "listener changed its fixed menu");
+            ensure!(*existing == offered, "server changed its fixed menu");
         } else {
             *mapping = Some(offered);
             self.status.send_replace(MenuStatus::Ready);
@@ -217,16 +218,16 @@ impl State {
         Ok(())
     }
     pub fn fail_initial(&self) {
-        if !self.listener && *self.status.borrow() == MenuStatus::Pending {
+        if !self.is_server && *self.status.borrow() == MenuStatus::Pending {
             self.status.send_replace(MenuStatus::Invalid);
         }
     }
     pub fn validate_local_info(&self, info: &Value) -> Result<()> {
         let offered = menu(info)?;
-        if self.listener {
+        if self.is_server {
             ensure!(
                 self.mapping.lock().unwrap().as_ref() == Some(&offered),
-                "listener menu cannot change"
+                "server menu cannot change"
             );
         }
         Ok(())

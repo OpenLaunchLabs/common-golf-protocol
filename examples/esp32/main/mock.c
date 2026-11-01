@@ -272,7 +272,7 @@ cgp_engine *cgp_create(cgp_role role,const char *name,struct in_addr local_ip) {
 #ifndef CONFIG_CGP_DRAFT
 #define CONFIG_CGP_DRAFT 3
 #endif
-    cgp_options options={.role=role,.draft=CONFIG_CGP_DRAFT,.listener=role!=CGP_SIMULATOR,
+    cgp_options options={.role=role,.draft=CONFIG_CGP_DRAFT,.is_server=role!=CGP_SIMULATOR,
         .name=name,.local_ip=local_ip,.callbacks={.connected=demo_connected,.tick=demo_tick,
         .message=demo_message,.accept_channel=demo_accept}};
     return cgp_create_options(&options);

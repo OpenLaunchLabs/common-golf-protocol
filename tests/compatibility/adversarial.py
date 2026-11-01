@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise stream isolation and boundary cases against every real QUIC listener.
+"""Exercise stream isolation and boundary cases against every real QUIC server.
 
 The Python package is the test driver; each target is a separate process using
 its own transport implementation. No target source is imported or mocked.
@@ -32,7 +32,7 @@ EXPECTED = {
 
 
 def records(path):
-    # The listener may be halfway through a 65 KiB log write. Only newline-
+    # The server may be halfway through a 65 KiB log write. Only newline-
     # terminated records are committed; never parse its in-progress final line.
     if not path.exists():
         return []
@@ -84,7 +84,7 @@ def marked(path, marker):
     return [r for r in records(path) if r.get('message', {}).get('probe') == marker]
 
 
-async def exercise(port, draft, directory, listener_output, expected_key=None):
+async def exercise(port, draft, directory, server_output, expected_key=None):
     checks = set()
     factory = partial(Probe, draft=draft)
     open_connect = 1003 if draft == 3 else 2
@@ -97,15 +97,15 @@ async def exercise(port, draft, directory, listener_output, expected_key=None):
             '127.0.0.1', port, configuration=first_id.configuration(is_client=True, draft=draft, expected_key=expected_key if draft == 3 else None),
             create_protocol=factory))
         await until(lambda: {0, 1, open_connect, 3, 4, 5, 8, 1000} <= {ch for ch, _ in first.received},
-                    'listener baseline channels')
+                    'server baseline channels')
         checks.add('baseline_channels')
         await until(lambda: any(r.get('channel') == open_connect and r.get('message', {}).get('Message') == 'adversarial reply'
-                               for r in records(listener_output)), 'Open Connect reply decoded by listener')
+                               for r in records(server_output)), 'Open Connect reply decoded by server')
         checks.add('open_connect_reply_without_prefix')
 
         # Keep one valid simulator-owned channel open for duplicate and survival checks.
         state_sid = first.publish(6, {'type': state_type, 'ready': True, 'probe': 'initial-state'})
-        await until(lambda: marked(listener_output, 'initial-state'), 'initial state')
+        await until(lambda: marked(server_output, 'initial-state'), 'initial state')
         for label, channel, body, expected in [
             ('reserved_stop_1', 999, frame({}), 1),
             ('wrong_owner_stop_1', 1, frame({'type': 'shot'}), 1),
@@ -127,11 +127,11 @@ async def exercise(port, draft, directory, listener_output, expected_key=None):
         # the same channel demonstrates that the reservation was released.
         truncated_sid = first.inject(7, struct.pack('>I', 3) + b'{}', fin=True)
         await asyncio.sleep(.1)
-        assert not any(r.get('channel') == 7 and 'message' in r for r in records(listener_output)), \
-            'Malformed result frames reached the listener application'
+        assert not any(r.get('channel') == 7 and 'message' in r for r in records(server_output)), \
+            'Malformed result frames reached the server application'
         result_sid = first.publish(7, {'type': 'result', **shot_identity, 'accepted': True,
                                        'probe': 'after-truncated-fin'})
-        await until(lambda: marked(listener_output, 'after-truncated-fin'), 'reopen after truncated FIN')
+        await until(lambda: marked(server_output, 'after-truncated-fin'), 'reopen after truncated FIN')
         assert result_sid != truncated_sid
         assert result_sid not in first.stops
         checks.add('truncated_fin_discard_and_reopen')
@@ -146,8 +146,8 @@ async def exercise(port, draft, directory, listener_output, expected_key=None):
             first._quic.send_stream_data(state_sid, part)
             first.transmit()
             await asyncio.sleep(.01)
-        await until(lambda: marked(listener_output, 'maximum-state'), '65535-byte state object')
-        got = marked(listener_output, 'maximum-state')[-1]['message']
+        await until(lambda: marked(server_output, 'maximum-state'), '65535-byte state object')
+        got = marked(server_output, 'maximum-state')[-1]['message']
         assert got == maximum, 'Maximum-size message changed or lost its unknown field'
         assert state_sid not in first.stops
         checks.add('maximum_65535_and_fragmented_header')
@@ -160,7 +160,7 @@ async def exercise(port, draft, directory, listener_output, expected_key=None):
         await until(lambda: {0, 1, open_connect} <= {ch for ch, _ in second.received}, 'second connection baseline')
         second.publish(6, {'type': state_type, 'ready': False, 'probe': 'second-client'})
         first.send(state_sid, {'type': state_type, 'ready': True, 'probe': 'first-client-still-active'})
-        await until(lambda: marked(listener_output, 'second-client') and marked(listener_output, 'first-client-still-active'),
+        await until(lambda: marked(server_output, 'second-client') and marked(server_output, 'first-client-still-active'),
                     'independent simultaneous state streams')
         assert not second.stops, second.stops
         assert first.peer_fingerprint and first.peer_fingerprint == second.peer_fingerprint
@@ -176,33 +176,33 @@ async def case(command, language, draft):
     label = f'{language} draft-{draft}'
     with tempfile.TemporaryDirectory(prefix='cgp-adversarial-') as temporary:
         directory = Path(temporary)
-        output = directory / 'listener.jsonl'
+        output = directory / 'server.jsonl'
         args = command + ['--role', 'listen', '--host', '127.0.0.1', '--port', '0', '--draft', str(draft),
                           '--version', Draft(draft).version, '--duration', '45', '--output', str(output),
-                          '--identity', str(directory / 'listener-identity')]
+                          '--identity', str(directory / 'server-identity')]
         process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
                                                       stderr=asyncio.subprocess.STDOUT)
         logs, drain = [], None
-        listener_key = None
+        server_key = None
         async def ready():
-            nonlocal listener_key
+            nonlocal server_key
             while line := await process.stdout.readline():
                 text = line.decode(errors='replace').strip()
                 logs.append(text)
                 if text.startswith('KEY '):
-                    listener_key = text.split()[1]
+                    server_key = text.split()[1]
                 if text.startswith('READY '):
                     return int(text.split()[1])
-            raise AssertionError('Listener exited before READY: ' + '\n'.join(logs))
+            raise AssertionError('Server exited before READY: ' + '\n'.join(logs))
         try:
             port = await asyncio.wait_for(ready(), 15)
             drain = asyncio.create_task(process.stdout.read())
-            checks = await asyncio.wait_for(exercise(port, draft, directory, output, listener_key), 35)
-            assert process.returncode is None, f'Listener exited unexpectedly: {process.returncode}'
+            checks = await asyncio.wait_for(exercise(port, draft, directory, output, server_key), 35)
+            assert process.returncode is None, f'Server exited unexpectedly: {process.returncode}'
             return {'case': label, 'result': 'passed', 'checks': checks}
         except Exception as error:
             return {'case': label, 'result': 'failed', 'error': f'{type(error).__name__}: {error}',
-                    'listener_log': logs}
+                    'server_log': logs}
         finally:
             await stop(process)
             if drain:

@@ -163,7 +163,7 @@ def _configure_raw_public_keys(context, is_client):
         original_finished = context._client_handle_finished
         def finished(*args):
             if context._certificate_request is None:
-                raise tls.AlertHandshakeFailure("listener did not request client raw public key")
+                raise tls.AlertHandshakeFailure("server did not request client raw public key")
             return original_finished(*args)
         context._client_handle_finished = finished
     else:

@@ -16,7 +16,7 @@ Open a pull request with the following information:
 - Description of the data exchanged.
 - Link to a specification or a contact.
 
-In draft 3, the identifier is the `contract` value in the listener's
+In draft 3, the identifier is the `contract` value in the server's
 `info.contracts` menu. See [custom channels in the RFC](rfc/0001-common-golf-protocol.md#6-custom-channels-1000-and-up).
-In drafts 1 and 2, it is the `name` in the stream opener's first
+In drafts 1 and 2, it is the `name` in the stream initiator's first
 `{"type": "private", ...}` message.

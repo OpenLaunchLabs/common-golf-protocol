@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     let deadline = tokio::time::Instant::now() + duration;
     match role {
         "listen" => {
-            let listener = endpoint::Listener::bind(
+            let server = endpoint::Server::bind(
                 &identity,
                 &[Draft::Three],
                 name,
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep_until(deadline) => break,
-                    incoming = listener.endpoint.accept() => {
+                    incoming = server.endpoint.accept() => {
                         let Some(incoming) = incoming else { break; };
                         let name = name.to_owned();
                         sessions.spawn(async move { exchange(incoming.await?, Role::Device, &name, deadline, None).await });
@@ -51,8 +51,8 @@ async fn main() -> Result<()> {
                 }
             }
             sessions.shutdown().await;
-            listener.endpoint.close(0u32.into(), b"demo complete");
-            listener.endpoint.wait_idle().await;
+            server.endpoint.close(0u32.into(), b"demo complete");
+            server.endpoint.wait_idle().await;
         }
         "connect" => {
             let devices = common_golf_protocol::discovery::browse(Duration::from_secs(2)).await?;
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
                 .iter()
                 .find(|d| d.name == name || d.name == fullname)
                 .context("named launch monitor was not discovered")?;
-            // The demo listener binds IPv4; try those discovered addresses first.
+            // The demo server binds IPv4; try those discovered addresses first.
             let mut device = device.clone();
             device.addresses.sort_by_key(|address| address.is_ipv6());
             let connected = endpoint::connect(&identity, &[Draft::Three], &device).await?;

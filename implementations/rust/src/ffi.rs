@@ -1,4 +1,4 @@
-//! Version 1 connector ABI. See include/cgp_rust.h for the safety contract.
+//! Version 1 client ABI. See include/cgp_rust.h for the safety contract.
 #![allow(clippy::missing_safety_doc)]
 use crate::{discovery, endpoint, identity::Identity, Draft, Peer, Role};
 use anyhow::{bail, ensure, Result};

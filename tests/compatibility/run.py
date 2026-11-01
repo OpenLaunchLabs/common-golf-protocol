@@ -77,49 +77,49 @@ async def stop(process):
             await process.wait()
 
 
-async def case(commands, listener, connector, ldraft, cdraft, lversion, cversion, defaults=False):
-    label = f'{listener}({lversion}) <- {connector}({cversion})'
+async def case(commands, server, client, ldraft, cdraft, lversion, cversion, defaults=False):
+    label = f'{server}({lversion}) <- {client}({cversion})'
     if defaults:
         label += ' [default profiles]'
     with tempfile.TemporaryDirectory(prefix='cgp-matrix-') as temp:
         work = Path(temp)
         common = ['--host', '127.0.0.1', '--fixtures', str(FIXTURES)]
-        lcmd = commands[listener] + common + ['--role', 'listen', '--port', '0',
-            '--duration', '20', '--output', str(work/'listener.jsonl'), '--identity', str(work/'listener-id')]
+        lcmd = commands[server] + common + ['--role', 'listen', '--port', '0',
+            '--duration', '20', '--output', str(work/'server.jsonl'), '--identity', str(work/'server-id')]
         if not defaults:
             lcmd += ['--draft', str(ldraft), '--version', lversion]
         log = []
-        listener_key = None
+        server_key = None
         peer = await asyncio.create_subprocess_exec(*lcmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        client = None
+        client_process = None
         drain = None
         async def ready():
-            nonlocal listener_key
+            nonlocal server_key
             while line := await peer.stdout.readline():
                 text = line.decode(errors='replace').strip()
                 log.append(text)
                 if text.startswith('KEY '):
-                    listener_key = text.split()[1]
+                    server_key = text.split()[1]
                 if text.startswith('READY '):
                     return int(text.split()[1])
-            raise AssertionError('Listener exited before READY: ' + '\n'.join(log))
+            raise AssertionError('Server exited before READY: ' + '\n'.join(log))
         try:
             port = await asyncio.wait_for(ready(), 15)
             drain = asyncio.create_task(peer.stdout.read())
-            ccmd = commands[connector] + common + ['--role', 'connect', '--port', str(port),
-                '--duration', '1', '--output', str(work/'connector.jsonl'), '--identity', str(work/'connector-id')]
+            ccmd = commands[client] + common + ['--role', 'connect', '--port', str(port),
+                '--duration', '1', '--output', str(work/'client.jsonl'), '--identity', str(work/'client-id')]
             if not defaults:
                 ccmd += ['--draft', str(cdraft), '--version', cversion]
             if cdraft == 3:
-                assert listener_key and re.fullmatch('[0-9a-f]{64}', listener_key), 'Missing listener key'
-                ccmd += ['--expected-key', listener_key]
-            client = await asyncio.create_subprocess_exec(*ccmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-            output, _ = await asyncio.wait_for(client.communicate(), 15)
+                assert server_key and re.fullmatch('[0-9a-f]{64}', server_key), 'Missing server key'
+                ccmd += ['--expected-key', server_key]
+            client_process = await asyncio.create_subprocess_exec(*ccmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            output, _ = await asyncio.wait_for(client_process.communicate(), 15)
             output = output.decode(errors='replace')
             if ldraft != cdraft:
-                assert client.returncode != 0, 'Different ALPNs connected successfully'
-                assert not [r for r in records(work/'connector.jsonl') if 'message' in r], 'Data crossed ALPN boundary'
-                assert not [r for r in records(work/'listener.jsonl') if 'message' in r], 'Listener received data across ALPN boundary'
+                assert client_process.returncode != 0, 'Different ALPNs connected successfully'
+                assert not [r for r in records(work/'client.jsonl') if 'message' in r], 'Data crossed ALPN boundary'
+                assert not [r for r in records(work/'server.jsonl') if 'message' in r], 'Server received data across ALPN boundary'
                 reason = r'alpn|application protocol|certificate|raw.public.key|unsupported|0x178|\b120\b'
                 if 3 in (ldraft, cdraft):
                     # TLS alert43 is unsupported_certificate: the selected profile
@@ -127,18 +127,18 @@ async def case(commands, listener, connector, ldraft, cdraft, lversion, cversion
                     reason += r'|cryptographic handshake failed: error 43'
                 assert re.search(reason, output, re.I), output
             else:
-                assert client.returncode == 0, output
+                assert client_process.returncode == 0, output
                 await asyncio.sleep(.1)
-                validate(records(work/'listener.jsonl'), 'listen', ldraft, cversion)
-                validate(records(work/'connector.jsonl'), 'connect', cdraft, lversion)
-            assert peer.returncode is None, f'Listener exited unexpectedly: {peer.returncode}'
+                validate(records(work/'server.jsonl'), 'listen', ldraft, cversion)
+                validate(records(work/'client.jsonl'), 'connect', cdraft, lversion)
+            assert peer.returncode is None, f'Server exited unexpectedly: {peer.returncode}'
             return {'case': label, 'result': 'passed', 'mismatch': ldraft != cdraft}
         except Exception as error:
-            return {'case': label, 'result': 'failed', 'error': str(error), 'listener_log': log,
-                    'listener_records': records(work/'listener.jsonl'), 'connector_records': records(work/'connector.jsonl')}
+            return {'case': label, 'result': 'failed', 'error': str(error), 'server_log': log,
+                    'server_records': records(work/'server.jsonl'), 'client_records': records(work/'client.jsonl')}
         finally:
-            if client:
-                await stop(client)
+            if client_process:
+                await stop(client_process)
             await stop(peer)
             if drain:
                 remainder = (await drain).decode(errors='replace')
@@ -154,18 +154,18 @@ async def main(args):
     assert drafts and all(draft in VERSIONS for draft in drafts), 'Unknown or empty draft selection'
     assert commands, 'Unknown or empty language selection'
     assert args.jobs > 0, '--jobs must be positive'
-    for listener, connector in itertools.product(commands, repeat=2):
+    for server, client in itertools.product(commands, repeat=2):
         for draft in drafts:
             # Includes both draft-1 patch versions in both directions.
             for lv, cv in itertools.product(VERSIONS[draft], repeat=2):
-                cases.append((listener, connector, draft, draft, lv, cv))
+                cases.append((server, client, draft, draft, lv, cv))
         if 3 in drafts:
             # Omit both CLI version flags: explicit draft-3 runs cannot detect
             # peers accidentally retaining a legacy default.
-            cases.append((listener, connector, 3, 3, '0.3.0', '0.3.0', True))
+            cases.append((server, client, 3, 3, '0.3.0', '0.3.0', True))
         if not args.no_mismatch:
             for ld, cd in itertools.permutations(drafts, 2):
-                cases.append((listener, connector, ld, cd, VERSIONS[ld][-1], VERSIONS[cd][-1]))
+                cases.append((server, client, ld, cd, VERSIONS[ld][-1], VERSIONS[cd][-1]))
     semaphore = asyncio.Semaphore(args.jobs)
     async def run(values):
         async with semaphore:

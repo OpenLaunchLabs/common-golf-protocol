@@ -57,7 +57,7 @@ async def listen(name, identity, create_protocol, *, draft=Draft.THREE, properti
 
 
 async def discover(seconds=3.0):
-    """Browse discovered listeners. Applications choose a name, never an IP field."""
+    """Browse discovered servers. Applications choose a name, never an IP field."""
     found = {}
     tasks = set()
     zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
@@ -69,7 +69,7 @@ async def discover(seconds=3.0):
                 found[name] = DiscoveredPeer(name.removesuffix("." + SERVICE), addresses[0], info.port,
                     {k.decode("utf-8", "replace"): (v or b"").decode("utf-8", "replace")
                      for k, v in info.properties.items()})
-    class Listener(ServiceListener):
+    class DiscoveryEvents(ServiceListener):
         def add_service(self, z, type_, name):
             task = asyncio.create_task(resolve(name))
             tasks.add(task)
@@ -78,7 +78,7 @@ async def discover(seconds=3.0):
             self.add_service(z, type_, name)
         def remove_service(self, z, type_, name):
             found.pop(name, None)
-    browser = AsyncServiceBrowser(zc.zeroconf, SERVICE, listener=Listener())
+    browser = AsyncServiceBrowser(zc.zeroconf, SERVICE, listener=DiscoveryEvents())
     try:
         await asyncio.sleep(seconds)
     finally:
@@ -91,7 +91,7 @@ async def discover(seconds=3.0):
 
 
 def dial(peer, identity, create_protocol, *, draft=Draft.THREE):
-    """Connect to a DiscoveredPeer; use one context per independent listener."""
+    """Connect to a DiscoveredPeer; use one context per independent server."""
     expected_key = validate_key(peer.properties.get("key")) if Draft(draft) == Draft.THREE else None
     return connect(peer.host, peer.port, configuration=identity.configuration(is_client=True, draft=draft, expected_key=expected_key),
                    create_protocol=create_protocol)

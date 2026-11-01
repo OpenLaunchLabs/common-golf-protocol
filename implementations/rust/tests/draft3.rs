@@ -227,7 +227,7 @@ async fn raw_keys_menu_snapshots_custom_bytes_and_replies() {
     assert!(device.send(0, &changed).await.is_err());
 }
 #[tokio::test]
-async fn listener_stream_overtaking_info_waits_and_decline_prevents_reopen() {
+async fn server_stream_overtaking_info_waits_and_decline_prevents_reopen() {
     let (_s, _c, remote, local, key) = pair().await;
     let mut sim = Peer::with_contracts(
         local,

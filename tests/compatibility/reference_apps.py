@@ -33,7 +33,7 @@ CASES = [(launch_monitor_minimum.Device, 'device', {0,1}, {0,6,7}),
 
 def check_example_message(draft, channel, message):
     if draft == Draft.THREE and channel == 1003:
-        # This example's listener menu binds Open Connect to 1003; it is not
+        # This example's server menu binds Open Connect to 1003; it is not
         # a global channel assignment or inferred from the number alone.
         check_message(draft, channel, message, contract='io.common-golf.open-connect-v1')
     else:

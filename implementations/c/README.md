@@ -3,7 +3,7 @@
 The C reference library provides QUIC transport for POSIX hosts and the
 [ESP32 demo](../../examples/esp32/README.md). This static C11 library handles
 TLS, framing, stream lifecycle, UTF-8 JSON validation, Ed25519 identities,
-listener menus, and custom JSON, raw streams and datagrams. Applications
+server menus, and custom JSON, raw streams and datagrams. Applications
 supply data and handle connection and message callbacks.
 
 `cgp_options.draft` selects draft 1 (0.1.1), draft 2 (0.2.0) or draft 3
@@ -36,11 +36,12 @@ support, and `cgp_discovery` for DNS-SD.
 The public API is declared in [`include/cgp.h`](include/cgp.h).
 
 1. Populate `cgp_options` with the role (`CGP_LAUNCH_MONITOR`,
-   `CGP_CONTROL_BOX` or `CGP_SIMULATOR`), listener mode, draft, name, local
-   address, identity directory and callbacks.
+   `CGP_CONTROL_BOX` or `CGP_SIMULATOR`), `is_server` (`true` for a QUIC server,
+   `false` for a QUIC client), draft, name, local address, identity directory
+   and callbacks. The application role is independent of the QUIC role.
 2. Create the engine with `cgp_create_options`.
-3. For a listener, advertise the port returned by `cgp_port` over DNS-SD.
-   For a connector, pass the discovered address and TXT `key` to
+3. For a server, advertise the port returned by `cgp_port` over DNS-SD.
+   For a client, pass the discovered address and TXT `key` to
    `cgp_connect_key`. The keyless `cgp_connect` is available for drafts 1
    and 2.
 4. Call `cgp_poll` every 10 ms. Call `cgp_destroy` to release the engine.
@@ -68,12 +69,12 @@ The `trust_tier` callback maps a peer fingerprint (the 32-byte Ed25519
 public key, lowercase hex) to `internal`, `developer` or `maker` (the
 default). `accept_channel` decides which incoming channels to read.
 
-In draft 3, the listener registers each custom channel with
+In draft 3, the server registers each custom channel with
 `cgp_bind_private` before publishing its first info message. Each binding
 specifies a channel number of 1000 or higher, a contract identifier and a
 wire format. `cgp_publish` includes these bindings in the info menu.
 
-On the connector, the `contract` callback identifies supported contracts
+On the client, the `contract` callback identifies supported contracts
 and the `menu` callback reports menu availability. Use
 `cgp_private_matches` and `cgp_channel_contract` to inspect the bindings.
 Info may also include the optional `reads` and `reads_contracts` hints.
@@ -101,7 +102,7 @@ with file mode 0600 and directory mode 0700. Loading a damaged identity
 file fails without overwriting it. A NULL directory creates an ephemeral
 identity for tests.
 
-Draft 3 uses Ed25519 raw public keys in both directions. The connector
+Draft 3 uses Ed25519 raw public keys in both directions. The client
 checks the advertised key before invoking application callbacks. Drafts 1
 and 2 use the same key in a self-signed X.509 certificate.
 
@@ -129,8 +130,8 @@ targets supply their own clock, randomness, logging and DNS-SD; see
 
 - `cgp-demo`: the [C example](../../examples/c/README.md).
 - `cgp-peer`: the compatibility-test peer. It accepts `--host`, `--port`
-  and `--fixtures tests/fixtures/conformance.json`. Draft 3 connectors require
-  `--expected-key` from the listener's `KEY` line. See
+  and `--fixtures tests/fixtures/conformance.json`. Draft 3 clients require
+  `--expected-key` from the server's `KEY` line. See
   [`tools/peer.c`](tools/peer.c).
 
 ## License

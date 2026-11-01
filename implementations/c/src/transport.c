@@ -78,7 +78,7 @@ static void drop_peer(cgp_peer *p) {
 static cgp_stream *channel_stream(cgp_peer *p, uint32_t channel, bool outgoing) {
     for (cgp_stream *s = p->streams; s; s = s->next) {
         if (!s->assigned || s->channel != channel || (s->outgoing != outgoing && !cgp_open_connect(p,channel)) || s->stopped) continue;
-        /* The channel 2 responder still owes replies after the opener's FIN. */
+        /* On channel 2, the stream initiator's peer still owes replies after FIN. */
         if (!s->rx.ended || (outgoing && cgp_open_connect(p,channel) && !s->outgoing)) return s;
     }
     return NULL;
@@ -151,7 +151,7 @@ bool cgp_publish(cgp_peer *p,unsigned channel,const char *json) {
     if(!cgp_json_valid(json,strlen(json)))return false;
     char *info=cgp_menu_info(p,json);if(!info)return false;
     bool sent=publish_json(p,0,info);free(info);
-    if(sent && p->engine->listener && !p->menu_seen) {
+    if(sent && p->engine->is_server && !p->menu_seen) {
         p->menu_seen=p->menu_valid=true;
         if(p->engine->callbacks.menu)p->engine->callbacks.menu(p,true,p->engine->user);
     }
@@ -243,7 +243,7 @@ static int receive_stream(ngtcp2_conn *conn, uint32_t flags, int64_t id,
     }
     size_t credit=s->replaying ? 0 : length;
     uint8_t *combined=NULL;
-    if(p->engine->draft==CGP_DRAFT_3 && !p->engine->listener && (s->pending_menu || !p->menu_seen) && !s->rx.has_channel) {
+    if(p->engine->draft==CGP_DRAFT_3 && !p->engine->is_server && (s->pending_menu || !p->menu_seen) && !s->rx.has_channel) {
         if(s->held_length+length>4096)return NGTCP2_ERR_CALLBACK_FAILURE;
         uint8_t *held=realloc(s->held,s->held_length+length);
         if(!held && length)return NGTCP2_ERR_CALLBACK_FAILURE;
@@ -313,7 +313,7 @@ static int stream_closed(ngtcp2_conn *conn, uint32_t flags, int64_t id,
 released:;
     /* One replacement slot for each incoming stream, including streams
      * refused because the table was full and never tracked. */
-    bool local_client = !p->engine->listener;
+    bool local_client = !p->engine->is_server;
     if ((id & 1) != (local_client ? 0 : 1)) {
         if (id & 2) ngtcp2_conn_extend_max_streams_uni(conn, 1);
         else ngtcp2_conn_extend_max_streams_bidi(conn, 1);
@@ -372,12 +372,12 @@ static int handshake_done(ngtcp2_conn *conn, void *user) {
         if(wolfSSL_get_negotiated_client_cert_type(p->tls,&client_type)!=WOLFSSL_SUCCESS ||
            wolfSSL_get_negotiated_server_cert_type(p->tls,&server_type)!=WOLFSSL_SUCCESS ||
            client_type!=WOLFSSL_CERT_TYPE_RPK || server_type!=WOLFSSL_CERT_TYPE_RPK || identity!=0 ||
-           (!p->engine->listener && strcmp(p->expected_key,fingerprint)))return NGTCP2_ERR_CALLBACK_FAILURE;
+           (!p->engine->is_server && strcmp(p->expected_key,fingerprint)))return NGTCP2_ERR_CALLBACK_FAILURE;
         const ngtcp2_transport_params *params=ngtcp2_conn_get_remote_transport_params(conn);
         if(!params || params->max_datagram_frame_size<1200)return NGTCP2_ERR_CALLBACK_FAILURE;
     }
-    if (identity < 0 || (identity == 1 && !p->engine->listener)) {
-        cgp_log("peer=%s invalid or missing Ed25519 listener identity", p->name);
+    if (identity < 0 || (identity == 1 && !p->engine->is_server)) {
+        cgp_log("peer=%s invalid or missing Ed25519 peer identity", p->name);
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     if (identity == 0) memcpy(p->fingerprint, fingerprint, 65);
@@ -605,11 +605,11 @@ cgp_engine *cgp_create_options(const cgp_options *options) {
     e->socket = -1;
     e->role = options->role;
     e->draft = draft;
-    e->listener = options->listener;
+    e->is_server = options->is_server;
     e->callbacks = options->callbacks;
     e->user = options->user;
     snprintf(e->name, sizeof(e->name), "%s", options->name);
-    e->tls = cgp_tls_context(options->listener, draft==CGP_DRAFT_3, options->identity_directory, e->fingerprint);
+    e->tls = cgp_tls_context(options->is_server, draft==CGP_DRAFT_3, options->identity_directory, e->fingerprint);
     if (!e->tls) goto failure;
     cgp_log("identity Ed25519=%s",e->fingerprint);
     e->socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -641,7 +641,7 @@ bool cgp_connect(cgp_engine *e, const struct sockaddr_in *remote, const char *na
     return cgp_connect_key(e,remote,name,NULL);
 }
 bool cgp_connect_key(cgp_engine *e,const struct sockaddr_in *remote,const char *name,const char *key) {
-    if(e->listener || (e->draft==CGP_DRAFT_3 && !cgp_key_valid(key)))return false;
+    if(e->is_server || (e->draft==CGP_DRAFT_3 && !cgp_key_valid(key)))return false;
     for (unsigned i = 0; i < CONFIG_CGP_MAX_CONNECTIONS; ++i) {
         cgp_peer *p = &e->peers[i];
         if (p->quic && p->remote.sin_addr.s_addr == remote->sin_addr.s_addr &&
@@ -704,7 +704,7 @@ static void read_packets(cgp_engine *e) {
                 break;
             }
         }
-        if (!p && e->listener) {
+        if (!p && e->is_server) {
             ngtcp2_pkt_hd initial;
             if (!ngtcp2_accept(&initial, packet, (size_t)length))
                 p = new_peer(e, &remote, "simulator", &initial);

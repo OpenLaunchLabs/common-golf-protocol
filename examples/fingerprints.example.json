@@ -1,5 +1,5 @@
 {
   "_comment": "Keys are the peer's Ed25519 public key, 32 bytes as lowercase hex. Tiers: internal, developer, maker. Anyone not listed is a maker.",
   "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08": {"name": "Example Sim Studio", "tier": "developer"},
-  "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae": {"name": "Example Connector", "tier": "internal"}
+  "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae": {"name": "Example Bridge", "tier": "internal"}
 }

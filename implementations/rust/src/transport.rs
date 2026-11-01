@@ -1,4 +1,4 @@
-//! Per-connection channel lifecycle, including draft 3 listener menus.
+//! Per-connection channel lifecycle, including draft 3 server menus.
 use crate::{
     custom::{self, Contract, Format},
     framing,
@@ -107,7 +107,7 @@ impl Peer {
     ) -> Result<Self> {
         Self::build(connection, role, info, private, true).await
     }
-    /// Connector ABI subset; Open Connect replies require the Rust Reply API.
+    /// Client ABI subset; Open Connect replies require the Rust Reply API.
     pub(crate) async fn without_open_connect(
         connection: noq::Connection,
         role: Role,
@@ -115,8 +115,8 @@ impl Peer {
     ) -> Result<Self> {
         Self::build(connection, role, info, HashSet::new(), false).await
     }
-    /// Draft 3 contract policy and optional listener menu supplied in `info.contracts`.
-    /// Connectors provide the advertised listener key, checked before any channel opens.
+    /// Draft 3 contract policy and optional server menu supplied in `info.contracts`.
+    /// Clients provide the advertised server key, checked before any channel opens.
     pub async fn with_contracts(
         connection: noq::Connection,
         role: Role,
@@ -174,14 +174,13 @@ impl Peer {
         let fingerprint = crate::identity::peer_fingerprint(&connection)?;
         let custom = if draft == Draft::Three {
             if !private.is_empty() {
-                bail!("draft 3 requires a listener menu, not static private bindings");
+                bail!("draft 3 requires a server menu, not static private bindings");
             }
             if connection.side() == noq::Side::Client {
                 crate::identity::check_expected_key(
                     &connection,
-                    expected_key.ok_or_else(|| {
-                        anyhow::anyhow!("draft 3 requires advertised listener key")
-                    })?,
+                    expected_key
+                        .ok_or_else(|| anyhow::anyhow!("draft 3 requires advertised server key"))?,
                 )?;
             }
             crate::draft3::validate(0, &info)?;
@@ -575,7 +574,7 @@ impl Peer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("datagrams require draft 3"))?;
         if !state.ready() {
-            bail!("listener menu not available");
+            bail!("server menu not available");
         }
         let contract = state
             .contract(channel)
@@ -685,7 +684,7 @@ async fn receive3(
     }
     let channel = u32::from_be_bytes(prefix);
     if channel >= 1000 {
-        // Only the prefix is consumed until the listener's info installs the menu.
+        // Only the prefix is consumed until the server's info installs the menu.
         let ready = tokio::select! {result=state.wait()=>result,_=connection.closed()=>return};
         if ready.is_ok() {
             if let Some(contract) = state.contract(channel) {

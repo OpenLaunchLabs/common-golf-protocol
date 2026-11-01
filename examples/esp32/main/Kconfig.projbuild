@@ -75,7 +75,7 @@ menu "Common Golf Protocol demo"
         default 2
         help
             Two allows the simulator to attach to a launch monitor and a
-            control box at once, or a listener to serve two simulators.
+            control box at once, or a server to serve two simulators.
             Higher values need more heap; measure the telemetry on your board.
 
 endmenu

@@ -163,7 +163,7 @@ async fn discovery_advertises_bound_port() {
 }
 
 #[tokio::test]
-async fn listener_serves_two_connections_and_maximum_frames() {
+async fn server_serves_two_connections_and_maximum_frames() {
     let identity = Identity::generate().unwrap();
     let server = noq::Endpoint::server(
         identity.server_config(&[Draft::One, Draft::Two]).unwrap(),

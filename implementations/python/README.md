@@ -14,8 +14,8 @@ Install from the repository root:
 python -m pip install ./implementations/python
 ```
 
-This listener advertises a launch monitor and sends a synthetic shot when
-a simulator connects:
+This QUIC server advertises a launch monitor and sends a synthetic shot when
+a simulator connects as a QUIC client:
 
 ```python
 import asyncio
@@ -87,13 +87,14 @@ stream starts.
 
 Register `Contract` definitions on both peers with
 `contracts={definition.identifier: definition}`. A definition has a format
-(`json`, `raw`, `datagram` or `raw_datagram`), opener roles, direction,
-payload limit, and optional `allowed_fingerprints`. `OPEN_CONNECT` provides
-the built-in Open Connect contract.
+(`json`, `raw`, `datagram` or `raw_datagram`), permitted application roles in
+`initiators`, direction, payload limit, and optional `allowed_fingerprints`.
+Stream initiation is independent of the QUIC client/server role.
+`OPEN_CONNECT` provides the built-in Open Connect contract.
 
-Configure the listener with `menu=[{"channel": 1000, "contract":
+Configure the server with `menu=[{"channel": 1000, "contract":
 "com.example.diagnostics-v1"}]`, or a callable `menu(fingerprint, tier)`.
-On the connector, start custom traffic in `on_menu_ready`.
+On the client, start custom traffic in `on_menu_ready`.
 `channels_for_contract(name)` returns the handles for a contract. Standard
 channels are available independently of the menu.
 
@@ -120,8 +121,8 @@ Drafts 1 and 2 configure private JSON channels on both endpoints with
 `cgp-python-peer` (or `python -m common_golf`) exchanges every standard
 channel and writes received messages and events as NDJSON. It defaults to
 draft 3 and accepts direct addresses through `--host` and `--port` for
-compatibility testing. Listeners print `KEY <hex>` followed by
-`READY <port>`; draft 3 connectors require `--expected-key <hex>`. Use
+compatibility testing. Servers print `KEY <hex>` followed by
+`READY <port>`; draft 3 clients require `--expected-key <hex>`. Use
 `--help` for the full option list. Applications should use discovery.
 
 ## Development

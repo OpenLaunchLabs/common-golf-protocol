@@ -2,7 +2,7 @@
 
 The `common-golf-protocol` crate provides QUIC connections, DNS-SD
 discovery, persistent Ed25519 identities and protocol message handling.
-It supports standard channels, trust tiers, listener menus, custom JSON,
+It supports standard channels, trust tiers, server menus, custom JSON,
 raw streams and sequenced datagrams.
 
 ## Build
@@ -58,15 +58,15 @@ Draft 3 uses mutual Ed25519 raw public keys, verifying both signatures.
 `endpoint::connect` rejects a missing, malformed or mismatched discovery
 `key` before opening channels. Drafts 1 and 2 use self-signed certificates:
 the verifier checks the key type and signature, and ignores dates, issuers
-and names. Listeners for these drafts request an optional client identity.
+and names. Servers for these drafts request an optional client identity.
 Missing or unlisted keys map to `trust::Tier::Maker`.
 
 ## Usage
 
 1. Load an `identity::Identity`.
-2. For a listener, call `endpoint::Listener::bind` to bind an ephemeral
-   port and advertise `_common-golf._udp.local.`. Keep the `Listener` alive
-   while accepting connections from its `endpoint`. For a connector, call
+2. For a QUIC server, call `endpoint::Server::bind` to bind an ephemeral
+   port and advertise `_common-golf._udp.local.`. Keep the `Server` alive
+   while accepting connections from its `endpoint`. For a QUIC client, call
    `discovery::browse`, pass a `Discovered` result to `endpoint::connect`,
    and keep the returned `Connected` alive.
 3. Create a `Peer` per connection with its role and info message;
@@ -80,9 +80,11 @@ Missing or unlisted keys map to `trust::Tier::Maker`.
 ### Custom channels (draft 3)
 
 Use `Peer::with_contracts(connection, role, info, contracts, expected_key)`
-and register each supported `custom::Contract` with its format, opener and
-direction. The listener lists up to 16 offers in `info.contracts`.
-The connector passes the discovered key as `expected_key` and calls
+and register each supported `custom::Contract` with its format, `initiator`
+(`custom::StreamInitiator`) and direction. The initiator policy selects
+application roles independently of the QUIC client/server role.
+The server lists up to 16 offers in `info.contracts`.
+The client passes the discovered key as `expected_key` and calls
 `wait_for_menu` before sending custom traffic. Standard channels are
 available independently of the menu. `menu()` returns the fixed offers.
 Custom streams received before the menu are held until it arrives.
@@ -122,8 +124,8 @@ tests. It writes JSONL output. Select a mode with
 `--role listen|connect|discover` and a draft with `--draft 1|2|3` (default 3).
 Direct addresses are supplied through `--host` and `--port` (default 0).
 
-A listener prints `KEY <fingerprint>` followed by `READY <port>`. Draft 3
-connectors require `--expected-key <fingerprint>`. Additional fixture,
+A server prints `KEY <fingerprint>` followed by `READY <port>`. Draft 3
+clients require `--expected-key <fingerprint>`. Additional fixture,
 identity, timing and output options are defined in
 [`cgp-peer.rs`](src/bin/cgp-peer.rs). Applications should use discovery;
 see the [Rust example](../../examples/rust/README.md).

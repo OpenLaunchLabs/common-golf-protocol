@@ -7,11 +7,12 @@ use crate::{
 use anyhow::{bail, Result};
 use std::{collections::HashMap, time::Duration};
 
-pub struct Listener {
+/// A QUIC server that advertises its bound port through DNS-SD.
+pub struct Server {
     pub endpoint: noq::Endpoint,
     _advertisement: Advertisement,
 }
-impl Listener {
+impl Server {
     /// Bind an ephemeral UDP port and advertise the actual bound port on all interfaces.
     pub fn bind(
         identity: &Identity,

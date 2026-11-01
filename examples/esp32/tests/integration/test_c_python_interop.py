@@ -136,7 +136,7 @@ async def python_to_native(executable, identity_dir):
         identity = cg.Identity(identity_dir / name, name)
         return connect("127.0.0.1", port, configuration=identity.configuration(is_client=True, draft=cg.Draft.TWO), create_protocol=Probe)
     async with Native(executable, "launch_monitor", draft=2) as launch:
-        # Two independent authenticated connections to one listener.
+        # Two independent authenticated connections to one server.
         async with dial(launch.port, "probe-a") as a, \
                    dial(launch.port, "probe-b") as b:
             await wait_until(lambda: {0, 1, 3, 4, 8}.issubset({ch for ch, _ in a.messages})

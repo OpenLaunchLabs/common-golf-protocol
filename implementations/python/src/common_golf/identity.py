@@ -59,7 +59,7 @@ class Identity:
         if expected_key is not None:
             validate_key(expected_key)
         if draft == Draft.THREE and is_client and expected_key is None:
-            raise ValueError("draft 3 requires the advertised listener key")
+            raise ValueError("draft 3 requires the advertised server key")
         config = QuicConfiguration(is_client=is_client, alpn_protocols=[Draft(draft).alpn],
                                    verify_mode=ssl.CERT_NONE, idle_timeout=30.0 if draft == Draft.THREE else 90.0,
                                    max_datagram_frame_size=1200 if draft == Draft.THREE else None)
