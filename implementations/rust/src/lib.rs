@@ -10,7 +10,6 @@ pub mod identity;
 pub mod message;
 pub mod streams;
 pub mod transport;
-pub mod trust;
 pub use message::Draft;
 pub use transport::{Event, Peer, Role};
 

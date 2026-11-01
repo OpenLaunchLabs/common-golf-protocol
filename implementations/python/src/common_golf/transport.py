@@ -10,7 +10,7 @@ from aioquic.quic.events import (HandshakeCompleted, StreamDataReceived, StreamR
                                 StopSendingReceived, ConnectionTerminated, DatagramFrameReceived)
 
 from . import compat
-from .identity import fingerprint, tier_of
+from .identity import fingerprint
 from .protocol import (Draft, StreamDecoder, ProtocolError, frame,
                        MAX_MESSAGE_BYTES, NOT_INTERESTED, validate_draft3_message, validate_shot_uuid)
 from .contracts import validate_menu, validate_reads, decode_datagram, DatagramSequences, OPEN_CONNECT
@@ -41,7 +41,7 @@ class Connection(QuicConnectionProtocol):
     Each connection owns its streams, peer identity, and application callbacks.
     """
     def __init__(self, *args, role="device", draft=Draft.THREE, info=None,
-                 read_channels=None, private_channels=None, trusted=None,
+                 read_channels=None, private_channels=None,
                  max_send_buffer=262144, contracts=None, menu=None, expected_key=None, **kwargs):
         super().__init__(*args, **kwargs)
         if role not in _SENDS:
@@ -78,7 +78,7 @@ class Connection(QuicConnectionProtocol):
         if 0 not in self.read_channels or (role == "sim" and 1 not in self.read_channels):
             raise ValueError("info and the simulator baseline shot channel are required")
         self.info = {"type": "info", "protocol_version": self.draft.version, **(info or {})}
-        self.trusted, self.peer_fingerprint, self.peer_tier = trusted or {}, None, "maker"
+        self.peer_fingerprint = None
         self._streams, self._incoming, self._outgoing = {}, {}, {}
         self._info_sent = False
         self._application_ready = False
@@ -380,9 +380,8 @@ class Connection(QuicConnectionProtocol):
                         or (not self._is_server and self.peer_fingerprint != self.expected_key)):
                     self.close(error_code=0x12a, reason_phrase="draft 3 identity/key/datagram requirement failed")
                     return
-            self.peer_tier = tier_of(self.peer_fingerprint, self.trusted)
             if self.draft == Draft.THREE and self._is_server:
-                entries = self._menu_option(self.peer_fingerprint, self.peer_tier) if callable(self._menu_option) else self._menu_option
+                entries = self._menu_option(self.peer_fingerprint) if callable(self._menu_option) else self._menu_option
                 if entries is not None:
                     self.info["contracts"] = entries
                 self._menu = validate_menu(self.info.get("contracts", []))

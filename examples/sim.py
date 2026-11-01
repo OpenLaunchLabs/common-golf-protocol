@@ -3,7 +3,6 @@ import argparse
 import asyncio
 from functools import partial
 import json
-from pathlib import Path
 
 from common_golf import Connection, Draft, Identity, dial, discover, OPEN_CONNECT, validate_shot_uuid
 
@@ -18,7 +17,7 @@ class Sim(Connection):
         super().__init__(*args, **kwargs)
 
     def on_connected(self):
-        print(f"connected fingerprint={self.peer_fingerprint} tier={self.peer_tier}", flush=True)
+        print(f"connected fingerprint={self.peer_fingerprint}", flush=True)
         self.publish(6, {"type": "simulator_state" if self.draft == Draft.THREE else "state", "ready": True,
                          **({"requested_capture_mode": "full"} if self.draft == Draft.THREE else {"mode": "range"}),
                          "player": {"name": "Player 1", "dexterity": "right"}})
@@ -49,14 +48,12 @@ def main():
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument("--draft", type=int, choices=(1, 2, 3), default=3)
     arguments.add_argument("--identity", help="persistent identity directory")
-    arguments.add_argument("--trusted", help="JSON mapping of public-key fingerprint to tier")
     arguments.add_argument("--duration", type=float, default=0, help="seconds; zero keeps running")
     arguments.add_argument("--once", action="store_true", help="one discovery round, then observe for ten seconds")
     args = arguments.parse_args()
     async def run():
         identity = Identity(args.identity or ".cgp-identities/example-sim", "example-sim")
-        trusted = json.loads(Path(args.trusted).read_text()) if args.trusted else {}
-        factory = partial(Sim, role="sim", draft=Draft(args.draft), trusted=trusted, info={"name": "example-sim"})
+        factory = partial(Sim, role="sim", draft=Draft(args.draft), info={"name": "example-sim"})
         tasks, seen = set(), set()
         async def attach(peer):
             try:

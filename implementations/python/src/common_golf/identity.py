@@ -73,13 +73,3 @@ def validate_key(value):
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
         raise ValueError("discovery key must be 64 lowercase hexadecimal characters")
     return value
-
-
-def tier_of(peer_fingerprint, trusted=None):
-    """Missing/unregistered certificates are makers. Trust never follows a name."""
-    if not peer_fingerprint:
-        return "maker"
-    tier = (trusted or {}).get(peer_fingerprint, "maker")
-    if isinstance(tier, dict):
-        tier = tier.get("tier", "maker")
-    return tier if tier in ("maker", "developer", "internal") else "maker"

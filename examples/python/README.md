@@ -26,11 +26,25 @@ simulator and the device.
 | Script | Behavior |
 |---|---|
 | `launch_monitor_minimum.py` | Shots containing ball speed, launch angle, and launch direction. |
-| `launch_monitor_full.py` | Device status and updated shot snapshots; trusted simulators also receive club and flight data. |
+| `launch_monitor_full.py` | Device status, updated shot snapshots, club data, and computed flight. |
 | `launch_monitor_open_connect.py` | Open Connect JSON on custom channel 1003, or channel 2 in drafts 1 and 2. |
 | `swing_speed_radar.py` | Club speed without ball data. |
 | `control_box.py` | Synthetic button presses. |
 | `sim.py` | Publishes simulator state, returns shot results, and responds to Open Connect requests. |
 
-Run any script with `--help` for its options, including identity, trust list,
-and duration.
+Run any script with `--help` for its identity and duration options.
+
+The full launch monitor sends club and flight data to peers in its
+`internal` or `developer` groups; every peer receives shots and status.
+To configure these groups, print the simulator's fingerprint:
+
+```sh
+.venv/bin/python -c 'from common_golf import Identity; print(Identity(".cgp-identities/example-sim", "example-sim").fingerprint)'
+```
+
+Copy `examples/fingerprints.example.json` to `my-fingerprints.json`, add an
+entry keyed by the fingerprint with `"group": "developer"`, and start the device:
+
+```sh
+.venv/bin/python examples/launch_monitor_full.py --peer-groups my-fingerprints.json
+```

@@ -50,7 +50,7 @@ Additional callbacks report connection establishment (`on_connected`),
 declined channels (`on_declined`), stream errors (`on_stream_error`), peer
 stream resets (`on_stream_cancelled`) and disconnection (`on_disconnected`).
 
-## Identity and trust
+## Identity
 
 Identity keys are stored with mode 0600. The fingerprint is the 32-byte Ed25519
 public key in lowercase hex. In draft 3, `listen` advertises the DNS-SD
@@ -58,12 +58,7 @@ public key in lowercase hex. In draft 3, `listen` advertises the DNS-SD
 application traffic. The low-level `Identity.configuration(is_client=True, draft=3,
 expected_key=...)` also requires the key.
 
-Configure trust with `trusted={fingerprint: tier}`, where `tier` is
-`"internal"`, `"developer"` or `"maker"`. Values may also be objects such as
-`{"tier": "internal"}`; see
-[`fingerprints.example.json`](../../examples/fingerprints.example.json).
-Unknown peers and unrecognized tiers default to `maker`. Use `peer_tier`
-in `on_connected` to select which channels to open.
+`on_connected` exposes the authenticated `peer_fingerprint`.
 
 ## Channels and streams
 
@@ -93,7 +88,8 @@ Stream initiation is independent of the QUIC client/server role.
 `OPEN_CONNECT` provides the built-in Open Connect contract.
 
 Configure the server with `menu=[{"channel": 1000, "contract":
-"com.example.diagnostics-v1"}]`, or a callable `menu(fingerprint, tier)`.
+"com.example.diagnostics-v1"}]`, or a callable `menu(fingerprint)` that
+selects entries for the authenticated peer.
 On the client, start custom traffic in `on_menu_ready`.
 `channels_for_contract(name)` returns the handles for a contract. Standard
 channels are available independently of the menu.

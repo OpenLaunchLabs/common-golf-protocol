@@ -99,6 +99,49 @@ def test_default_apis_advertise_key_and_exchange_raw_keys_and_menu(tmp_path, mon
     asyncio.run(run())
 
 
+def test_menu_callback_applies_application_policy_to_authenticated_keys(tmp_path):
+    async def run():
+        server_id = Identity(tmp_path/'server')
+        permitted_id = Identity(tmp_path/'permitted', 'same-name')
+        other_id = Identity(tmp_path/'other', 'same-name')
+        peers, selected_keys = [], []
+        contract = Contract('com.example.diagnostics-v1')
+        entries = [{'channel': 1000, 'contract': contract.identifier}]
+
+        def select_menu(peer_key):
+            selected_keys.append(peer_key)
+            return entries if peer_key == permitted_id.fingerprint else []
+
+        server = await serve('127.0.0.1', 0,
+            configuration=server_id.configuration(is_client=False),
+            create_protocol=partial(Recorder, role='device', peers=peers,
+                                    contracts={contract.identifier: contract}, menu=select_menu))
+        try:
+            for identity in (permitted_id, other_id):
+                async with connect('127.0.0.1', server._transport.get_extra_info('sockname')[1],
+                    configuration=identity.configuration(is_client=True, expected_key=server_id.fingerprint),
+                    create_protocol=partial(Recorder, role='sim', contracts={contract.identifier: contract})) as client:
+                    await until(lambda: client.menu_ready)
+                    device = peers[-1]
+                    assert device.peer_fingerprint == identity.fingerprint
+                    assert client.channels_for_contract(contract.identifier) == (
+                        [1000] if identity is permitted_id else [])
+                    if identity is permitted_id:
+                        device.publish(1000, {'diagnostics': True})
+                        await until(lambda: (1000, {'diagnostics': True}) in client.messages)
+                    # A peer excluded from this menu can still receive standard data.
+                    shot = {'type': 'shot', 'shot_uuid': new_shot_uuid(),
+                            'ball_speed_meters_per_second': 60,
+                            'vertical_launch_angle_degrees': 12, 'horizontal_launch_angle_degrees': 0}
+                    device.publish(1, shot)
+                    await until(lambda: (1, shot) in client.messages)
+            assert selected_keys == [permitted_id.fingerprint, other_id.fingerprint]
+        finally:
+            server.close()
+            await asyncio.sleep(.1)
+    asyncio.run(run())
+
+
 def test_raw_public_key_menu_json_raw_datagram_and_snapshot_exchange(tmp_path):
     async def run():
         server_id, client_id = Identity(tmp_path/'server'), Identity(tmp_path/'client')

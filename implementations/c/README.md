@@ -63,11 +63,11 @@ Applications handle other message semantics, including state patches and
 snapshot replacement. For draft 3, generate one `shot_uuid` per shot with
 `cgp_shot_uuid`, using UTC milliseconds, and reuse it for related messages.
 
-### Trust and custom channels
+### Identity and custom channels
 
-The `trust_tier` callback maps a peer fingerprint (the 32-byte Ed25519
-public key, lowercase hex) to `internal`, `developer` or `maker` (the
-default). `accept_channel` decides which incoming channels to read.
+`connected` and `cgp_peer_identity` expose the authenticated fingerprint:
+the 32-byte Ed25519 public key in lowercase hex. `accept_channel` selects
+incoming channels to read.
 
 In draft 3, the server registers each custom channel with
 `cgp_bind_private` before publishing its first info message. Each binding

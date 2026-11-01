@@ -41,24 +41,10 @@ run at the same time, with an independent connection for each pair.
 | Device script in `examples/` | Features |
 |---|---|
 | `launch_monitor_minimum.py` | Ball speed and launch angles on channel 1. |
-| `launch_monitor_full.py` | Device status, shot updates, spin, club data, and computed flight. Club and flight data are restricted to trusted simulators. |
+| `launch_monitor_full.py` | Device status, shot updates, spin, club data, and computed flight. |
 | `launch_monitor_open_connect.py` | GSPro Open Connect v1 messages over QUIC using the Open Connect custom contract. |
 | `swing_speed_radar.py` | Club speed without ball data. |
 | `control_box.py` | Virtual button presses. |
-
-To enable trusted channels in the full launch monitor example, print the
-simulator's fingerprint:
-
-```sh
-.venv/bin/python -c 'from common_golf import Identity; print(Identity(".cgp-identities/example-sim", "example-sim").fingerprint)'
-```
-
-Copy `examples/fingerprints.example.json` to `my-fingerprints.json`, add an
-entry keyed by the fingerprint with `"tier": "developer"`, and start the device:
-
-```sh
-.venv/bin/python examples/launch_monitor_full.py --trusted my-fingerprints.json
-```
 
 The examples use draft 3 by default. Pass `--draft 1` or `--draft 2` to both
 endpoints to use an earlier draft. See also the [Rust](examples/rust/README.md)

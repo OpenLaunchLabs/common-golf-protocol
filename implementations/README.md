@@ -42,7 +42,7 @@ with the transport, private channel and shot rules defined by their
 respective drafts. Rust requires separate TLS configurations for draft 3
 and earlier drafts.
 
-Applications supply measurements, trust lists and channel policies. The
+Applications supply measurements and local access policies. The
 libraries enforce transport, menu and shot-identity rules. The test harness
 provides full schema and cross-field validation.
 

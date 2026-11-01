@@ -36,8 +36,6 @@ typedef struct {
     void (*disconnected)(cgp_peer *, void *user);
     /* Optional policy: 0 accepts, 1 declines. Standard ownership always applies. */
     int (*accept_channel)(cgp_peer *, uint32_t channel, void *user);
-    /* Return internal/developer/maker. Unknown and absent identities default maker. */
-    const char *(*trust_tier)(const char *fingerprint, void *user);
 } cgp_callbacks;
 typedef struct {
     cgp_role role; /* Application role, independent of the QUIC connection role. */
@@ -89,7 +87,6 @@ bool cgp_send_datagram(cgp_peer *, uint32_t, const uint8_t *, size_t);
 size_t cgp_max_datagram_payload(const cgp_peer *);
 bool cgp_private_matches(const cgp_peer *, uint32_t, const char *contract);
 const char *cgp_channel_contract(const cgp_peer *, uint32_t);
-const char *cgp_peer_tier(const cgp_peer *);
 const char *cgp_peer_identity(const cgp_peer *);
 cgp_draft cgp_peer_draft(const cgp_peer *);
 void *cgp_peer_user_data(const cgp_peer *);

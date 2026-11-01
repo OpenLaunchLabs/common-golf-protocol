@@ -381,12 +381,9 @@ static int handshake_done(ngtcp2_conn *conn, void *user) {
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     if (identity == 0) memcpy(p->fingerprint, fingerprint, 65);
-    const char *tier = p->engine->callbacks.trust_tier ? p->engine->callbacks.trust_tier(cgp_peer_identity(p),p->engine->user) : "maker";
-    if (!tier || (strcmp(tier,"internal") && strcmp(tier,"developer"))) tier = "maker";
-    snprintf(p->tier,sizeof(p->tier),"%s",tier);
     p->ready = true;
-    cgp_log("CONNECTED peer=%s fingerprint=%s tier=%s handshake_ms=%" PRIu64,
-            p->name, identity == 0 ? fingerprint : "none", p->tier, (cgp_now_ns() - p->created) / 1000000);
+    cgp_log("CONNECTED peer=%s fingerprint=%s handshake_ms=%" PRIu64,
+            p->name, identity == 0 ? fingerprint : "none", (cgp_now_ns() - p->created) / 1000000);
     return 0;
 }
 

@@ -69,7 +69,7 @@ typedef struct cgp_peer {
     uint64_t created, next_action, release_at;
     bool ready, started, failed;
     bool notified, info_sent;
-    char fingerprint[65], expected_key[65], tier[16];
+    char fingerprint[65], expected_key[65];
     bool menu_seen, menu_valid;
     unsigned datagram_cursor;
     void *user_data;
