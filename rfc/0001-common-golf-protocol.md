@@ -542,6 +542,21 @@ device's ball shot; any pairing for display is a local heuristic.
 
 ### 5.4 Channel 4: `device_status`
 
+This channel is optional. A device MAY leave it unopened and send
+no device status. Because the device opens this channel, opting out requires
+no decline message. Simulators MUST NOT require this channel for play.
+
+Simulators SHOULD handle an unopened `device_status` channel without an
+error, warning, or startup wait. Play continues without device status,
+using the unavailable-value defaults below.
+
+For example, a simple launch monitor that is always ready, needs no capture
+mode selection, and provides no pre-impact ball detection, placement feedback,
+or battery status can exchange `info` and send `shot` messages without ever
+opening channel 4. It need not report uptime or send placeholder status values.
+A device without ball detection SHOULD omit `ball_detected` rather than send a
+fixed value.
+
 Device state uses patches. The device sends a complete snapshot when the
 stream opens, followed by changed fields only. An omitted field remains
 unchanged, `null` clears a value, and a nested object replaces the previous
@@ -558,6 +573,12 @@ object in full. All fields other than `type` are optional.
 | `uptime_seconds` | Nonnegative |
 | `message` | Human-readable device message |
 
+Simulators SHOULD treat unavailable `ready` or `ball_detected` values (not
+yet reported, including when this channel is unopened, or cleared with
+`null`) as `true` for play and UI behavior.
+Readiness or ball-detection UI and user prompts SHOULD appear only while
+the corresponding value is explicitly `false`.
+
 Positions use a local capture-area coordinate system with an origin defined
 and documented by the device. Positive x points right of the target line,
 and positive y points forward along it. These coordinates report device
@@ -566,6 +587,14 @@ coordinates provide no information about placement requirements.
 
 `capture_mode` reports the mode actually in effect, whether or not the
 simulator requested it (section 5.6). It is not an acknowledgement.
+
+A device that reports readiness only:
+
+```json
+{"type": "device_status", "ready": true}
+```
+
+A device that provides ball detection and placement feedback can report:
 
 ```json
 {"type": "device_status", "ready": true, "capture_mode": "putting", "ball_detected": true, "ball_zone": {"x_meters": -0.1, "y_meters": 0, "width_meters": 0.2, "height_meters": 0.3}, "ball_position": {"x_meters": 0, "y_meters": 0.1}}
