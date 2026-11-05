@@ -3,163 +3,182 @@
 | | |
 |---|---|
 | Document | 0001 |
-| Status | Draft 2 |
-| Protocol version | 0.2.0 |
-| ALPN | `common-golf/draft-2` |
+| Status | Draft 3, unreleased |
+| Protocol version | 0.3.0 |
+| ALPN | `common-golf/draft-3` |
 | Service type | `_common-golf._udp` |
-| Date | 2026-10-17 |
 
-The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be read as
-in RFC 2119. Everything else is explanation.
+This specification defines draft 3. Published drafts 1 and 2 retain their
+schemas in `schema/draft-1/` and `schema/draft-2/`. Section 3.8 lists the
+supported protocol versions and their ALPN identifiers.
 
-## 1. Why
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are interpreted as
+described in RFC 2119.
 
-The following protocols connect launch monitors and simulators.
+## 1. Overview
 
-| Protocol | Transport | Who listens | Framing | Units | Direction | Discovery | Security |
-|---|---|---|---|---|---|---|---|
-| GSPro Open Connect v1 | TCP 921 | Simulator | Unspecified | `Units: "Yards"` label; speed is mph, unstated | Device to sim, with coded replies | None | None |
-| OpenGolfSim | TCP 3111 | Simulator | Newline-delimited JSON | `unit: imperial\|metric`; results always metres | Bidirectional | None | None |
-| OpenLaunch Nova | TCP 2921 and WebSocket 2920 | Device | Newline-ish on TCP, one frame per message on WS | mph on TCP, m/s on WS, same device | Device to sim only | mDNS | None |
-| [Pureplay Connect v1](https://github.com/PureplayGolf/Pureplay-Connect) | TCP 9760 | Simulator | Little-endian binary, CRC32C | Fixed m/s, degrees, rpm, mm | Device telemetry and simulator commands | None specified | None specified |
+Common Golf Protocol (CGP) connects launch monitors, swing radars, control
+boxes and simulator software over QUIC. It provides local device discovery,
+mutual authentication, explicit measurement units and independent channels
+for measurements, controls and simulator state.
 
-Every integrator writes an adapter per pair of products. The same device
-reports ball speed in two units on two ports. Nobody authenticates anybody,
-so a "launch monitor" can be a shell script, and every product ships an IP
-field, a port field and a scan button that users have to understand.
+Standard channels define shared message formats. Custom channels support
+vendor features and existing protocols without changing those formats.
 
-This document replaces all of that with one connection that is encrypted
-and authenticated by its transport, found by discovery alone, carries SI
-numbers whose units are in their names, and lets any peer add private
-channels without forking the protocol.
+## 2. Transport overview
 
-## 2. What QUIC gives you for free
+QUIC (RFC 9000) provides encrypted connections with TLS 1.3, application
+protocol selection through ALPN, and independent reliable streams. Either
+endpoint can open a stream, and a stalled stream does not block other
+streams. Receivers can decline streams they do not use.
 
-If you know TCP sockets, here is what changes. QUIC is TCP's replacement,
-standardised in RFC 9000, available as a library in every mainstream
-language.
-
-- **Encryption is built in.** TLS 1.3 is part of the handshake. There is no
-  plaintext mode. Nothing on the wire is readable by a packet sniffer.
-- **Both ends have a key.** TLS requires the listener to prove it holds a
-  private key and can ask the connector to do the same, usually by
-  presenting a certificate, which is a public key with a name around it.
-  That public key identifies the holder. This document uses nothing else
-  for identity.
-- **Version negotiation is built in.** The connector names the application
-  protocol in the handshake (ALPN). `common-golf/draft-2` is this draft;
-  section 3.8 says how that changes.
-- **Streams are cheap and independent.** One connection carries many
-  streams. Each is reliable and ordered like a TCP socket, but a slow or
-  stalled stream does not block the others. Either side can open streams,
-  one-way or two-way.
-- **Declining is built in.** A receiver that does not want a stream tells
-  the sender to stop, with a code. No application message is needed.
-- **Connections are cheap too.** A listener serves many connections on one
-  port, each with its own handshake, certificate and streams. There is no
-  reason to assume one client, and no reason to build a product that
-  only talks to one thing.
-
-This document adds four bytes at the start of each stream and four bytes in
-front of each message. That is the entire framing.
+CGP requires both endpoints to authenticate with Ed25519 raw public keys
+(RFC 7250). Each connection authenticates its peers and has independent streams. Standard messages use JSON with a four-byte channel
+prefix per stream and a four-byte length prefix per message. Custom
+contracts can also use raw streams or QUIC datagrams.
 
 ## 3. Transport
 
 ### 3.1 Roles
 
-The side closer to the hardware listens: a launch monitor, a swing radar, a
-control box, or a desktop connector application standing in for one. The
-simulator connects. Either side MAY take either QUIC role when a deployment
-needs it; channel ownership in section 5 does not depend on who connected.
+Connection roles use QUIC terminology ([RFC 9000, section
+1.2](https://www.rfc-editor.org/rfc/rfc9000.html#section-1.2)): the **client**
+initiates a QUIC connection, and the **server** accepts it. An **endpoint**
+is either participant; its **peer** is the other endpoint. Client and server
+below always refer to these QUIC roles.
 
-The direction serves the user at the screen: the simulator browses and the
-user picks a device. A screenless device advertises and waits instead of
-asking its owner to enter the simulator's address. Open Connect,
-OpenGolfSim, and Pureplay put the listener at the simulator; Nova already
-shows the device-listener alternative. Discovery removes the address-entry
-step whichever peer is listening.
+Device, controller and simulator are application roles. Normally, the device
+acts as the QUIC server, and the simulator acts as the QUIC client. The
+simulator displays discovered devices for the user to select. Either side
+MAY take either QUIC role when a deployment needs it; channel ownership
+(section 5) is independent of the QUIC role.
 
-A listener MUST accept more than one connection at a time and MUST NOT
-refuse or drop a connection because another exists. A connector MUST be
-able to hold connections to more than one listener at a time. Every
-connection is independent: its own peer certificate, its own tier, its own
-open channels, its own private-channel arrangements, its own `shot_number`
-sequence.
+A **bridge application** translates between CGP and another interface or
+protocol. A desktop bridge for a device acts on the device's behalf and
+normally accepts CGP connections as a QUIC server. The term bridge describes
+the application's purpose; its QUIC client or server role is determined
+separately for each connection.
 
-This is normal, not exceptional. A launch monitor on a range is talking to
-the simulator, the vendor's phone app, a coaching tool and a diagnostics
-dashboard at the same time, and sends each of them what its tier allows. A
-simulator is connected to a launch monitor and a control box, and to a
-second launch monitor when a second player's device is on the same
-network. Nothing in this document depends on there being exactly one of
-anything.
+The **stream initiator** is the endpoint that opens a particular stream
+([RFC 9000, section 2.1](https://www.rfc-editor.org/rfc/rfc9000.html#section-2.1)).
+Either the QUIC client or server can initiate streams, subject to channel
+ownership and contract rules. On a bidirectional stream, the initiator's
+peer can send data on the same stream without becoming its initiator.
 
-### 3.2 Discovery, and nothing else
+A server MUST accept more than one connection at a time and MUST NOT
+refuse or drop a connection because another exists. A client MUST be able
+to hold connections to more than one server at a time. Every connection
+has its own authenticated key, open channels and custom-channel menu.
+A shot retains its `shot_uuid` when sent to multiple peers or replayed after
+reconnection.
 
-A listener MUST bind an ephemeral UDP port and MUST advertise itself with
+### 3.2 Discovery
+
+A server MUST bind an ephemeral UDP port and MUST advertise itself with
 DNS-SD over mDNS (RFC 6762, RFC 6763):
 
 | Record | Value |
 |---|---|
 | Service type | `_common-golf._udp.local.` |
 | Instance name | Human-readable device name |
-| SRV | The host and the port the listener actually bound |
-| TXT | `vendor`, `model`, `serial` (all optional, all strings) |
+| SRV | The host and the port the server actually bound |
+| TXT | `key` (required); `vendor`, `model`, `serial`, `alpn`, `caps` (optional); all strings |
 
-A connector MUST find listeners by browsing for that service type.
-Discovery is REQUIRED on both ends; it is not a convenience layered over
-manual addressing.
+`key` is the server's fingerprint (section 4): the Ed25519 public key it
+presents in the handshake, encoded as 64 lowercase hex characters. A
+server MUST include it. A client MUST reject a record whose `key` is
+missing or is not exactly 64 lowercase hex characters. The fingerprint is
+visible to the local network and can identify a returning server.
 
+`alpn` and `caps` provide information for the discovery interface. The
+negotiated ALPN and the `info` received after connection are authoritative.
+Clients MUST ignore unknown TXT keys.
+
+`alpn` lists every ALPN string the server accepts, comma-separated, each
+with the `common-golf/` prefix removed (`draft-3` for
+`common-golf/draft-3`). It MUST match what the handshake accepts. Clients
+compare entries exactly after restoring the prefix and MUST NOT parse them
+for version numbers. When no entry matches a supported string, the client
+MAY skip the handshake and report the incompatibility. An unrecognized
+identifier can indicate that the client needs an update; a known but
+unsupported older identifier can indicate that the server needs one.
+
+`caps` is a comma-separated list of lowercase ASCII capabilities the server
+can provide:
+
+| Value | Meaning | Channels |
+|---|---|---|
+| `ball` | Sends ball data | 1 |
+| `club` | Sends club data | 3 |
+| `flight` | Sends a computed flight | 8 |
+| `control` | Sends control input | 5 |
+| `simulation` | Runs the game and sends state and results | 6, 7 |
+
+Clients MUST ignore values they do not know; values may be added without
+changing the ALPN. Clients MAY use `caps` to group, label or filter
+servers in a user interface, and MUST NOT use it to decide which channels
+to open or read. A server does not necessarily send every capability to
+every peer.
+
+A server whose `key`, `alpn` or `caps` value changes MUST re-announce its
+TXT record (RFC 6762, section 8.4).
+
+```text
+vendor=Garage Labs
+model=GL-1
+key=<64 hex characters>
+alpn=draft-2,draft-3
+caps=ball,club,control
+```
+
+A client MUST find servers by browsing for the service type.
 Implementations SHOULD NOT present an IP address, a port, or a scan control
-anywhere in a user interface. Connection setup is: see the list of
-discovered devices, pick one.
+in a user interface. Users connect by selecting a discovered device.
 
-If you are about to add an address field anyway, read this paragraph
-first. Every protocol in section 1 permitted manual addressing, and every
-product built on them ended up with an IP field, a port field and a scan
-button, because once the protocol allows it the first support ticket
-produces it. That control cluster is the single most common support
-problem in this space. It teaches users about ports, it breaks when DHCP
-hands out a new address, and it is unnecessary: the user never has
-information the connector cannot get from discovery. Remove the field and
-the problem it solves disappears with it.
+Both endpoints must share a network segment that permits multicast. Networks
+that block multicast prevent discovery. Diagnostic address overrides belong
+in support tools or configuration files, outside the product's connection
+interface.
 
-The deployment assumption is that both ends sit on one network segment
-that passes multicast, which is every home and shop network. When
-discovery fails the fix is the network: a phone hotspot works, venue guest
-wifi that blocks multicast does not. If a vendor insists on a diagnostic
-override for support staff, it belongs in a configuration file or a
-support tool, never in the product.
+### 3.3 Raw public keys
 
-### 3.3 Certificates
+Both endpoints MUST authenticate with Ed25519 raw public keys ([RFC
+7250](https://www.rfc-editor.org/rfc/rfc7250.html)). The TLS
+`server_certificate_type` and `client_certificate_type` extensions MUST
+negotiate `RawPublicKey`. Endpoints MUST NOT offer, accept, or fall back to
+X.509 certificates.
 
-A listener MUST present a certificate; TLS requires it. A connector SHOULD
-present one, and a listener SHOULD request it, so that both sides can be
-identified. A connector that presents none is treated as a maker (section
-4). A self-signed certificate generated on first run is sufficient and
-expected, and so is a raw public key (RFC 7250) where the library supports
-it. The key MUST be Ed25519, so that every identity is the same 32 bytes.
-Certificate validity dates MUST be ignored, so a device with no clock is
-conforming. No certificate authority is involved anywhere. Use a QUIC
-library that brings its own TLS; the TLS built into Windows cannot do
-Ed25519 and is the wrong choice here for other reasons too.
+The server MUST request the client's key and the client MUST present
+it. Each endpoint MUST verify the peer's proof of possession. A missing key,
+a key of another algorithm, or failed proof of possession MUST fail the
+handshake.
 
-This document takes no position on 0-RTT early data. Early data can be
-replayed by someone on the path (RFC 9001, section 9.2), but nearly every
-message here is a snapshot that replaces the previous one, so a replay
-changes nothing. The exception is a `control` press, where a replayed
-`mulligan` would be taken twice; a vendor who cares keeps control off
-early data.
+RFC 7250 carries the key as DER-encoded SubjectPublicKeyInfo. The
+fingerprint is the underlying 32 public-key bytes. An implementation can
+generate a key on first run and retain it across restarts. Authentication
+does not require a certificate authority or a clock.
+
+Servers MUST NOT depend on TLS Server Name Indication (SNI). A server
+MUST accept an otherwise valid handshake with no SNI and MUST NOT require a
+particular SNI value. Discovery supplies the destination, ALPN selects the
+protocol, and the key supplies identity.
+
+Implementations MUST disable QUIC 0-RTT early data for CGP connections.
+CGP application data MUST NOT be sent or accepted in 0-RTT. This avoids
+early-data replay (RFC 9001, section 9.2), which can repeat actions
+triggered by `control` messages.
 
 ### 3.4 Framing
 
-Every stream begins with the channel ID:
+Every reliable stream begins with a channel ID written by the stream initiator.
+Replies on the same bidirectional stream omit this prefix.
 
 ```
 channel_id: 4 octets, unsigned, big-endian
 ```
 
-Every message after that is:
+Standard channels and framed-JSON custom contracts then encode each message
+as:
 
 ```
 length:  4 octets, unsigned, big-endian, counting payload only
@@ -167,251 +186,286 @@ payload: exactly length octets, one UTF-8 JSON object
 ```
 
 A reader MUST handle a message split across reads and several messages in
-one read.
+one read. Implementations encode the byte order explicitly rather than
+copying native structs onto the wire.
 
-Big-endian headers follow the traditional network-byte-order convention.
-Pureplay chooses little-endian binary fields, which can be convenient on
-little-endian microcontrollers. Neither order makes a protocol inherently
-more suitable for low-level devices: portable implementations encode and
-decode the specified order explicitly, rather than copying native structs
-onto the wire. CGP's binary headers have a byte order; its JSON numbers do
-not.
-
-Every channel definition states its maximum message size, and a receiver
-MUST accept any message up to that size on that channel. Channels 0 to 8
-are small JSON objects and their maximum is 65,535 bytes. This is the
-DNS-over-QUIC rule (RFC 9250, section 4.6): one fixed number, nothing
-negotiated. Private channels choose their own. A future channel carrying
-images or video would state its own ceiling, and would likely be a byte
-stream rather than JSON frames. Every message in this document is under
-four kilobytes.
+Each channel defines a maximum message size. A receiver MUST accept any
+message up to that size. Channels 0, 1 and 3 to 8 have a fixed limit of
+65,535 bytes; custom contracts define their own limits.
 
 JSON numbers MUST be within the IEEE 754 double range (I-JSON, RFC 7493,
-section 2.2). No golf value comes close; a number such as `1e999` means the
-sender is broken.
+section 2.2).
 
 A length above the channel's maximum, a payload that is not one valid JSON
-object, a number outside the double range, or a FIN arriving inside a frame
-is malformed. The receiver MUST
-discard the rest of that stream, MUST send STOP_SENDING with application
-error code 2 if the stream is still open (a stream that already ended with
-FIN cannot be stopped, so it is simply discarded), and MUST keep the
-connection open. The sender MAY reopen the channel on a new stream.
-
-Datagrams are not used in this version.
+object, a number outside the double range, or a FIN inside a frame is
+malformed. The receiver MUST discard the rest of that stream, MUST send
+STOP_SENDING with code 2 if the stream is still open (a stream already ended
+by FIN is discarded), and MUST keep the connection open. The sender
+MAY reopen the channel on a new stream unless it has been declined with code
+1 on this connection.
 
 ### 3.5 Declining a channel
 
-A receiver that does not read a channel MUST send STOP_SENDING with
-application error code 1 on that stream. Simply never reading it is not
-allowed: unread bytes hold connection-level flow-control credit (RFC 9000,
-section 4) and would eventually stall the channels the receiver does want.
-The sender MUST treat code 1 as "not interested" and MUST NOT treat it as
-an error or close the connection.
+A receiver that does not read a stream MUST send STOP_SENDING with code 1.
+Unread streams consume connection-level flow-control credit (RFC 9000,
+section 4) and can stall other channels. Custom streams awaiting the menu
+are the only exception (section 3.9). The sender MUST treat code 1 as a
+refusal for the rest of the connection: it MUST NOT reopen that channel on
+this connection, treat the decline as an error, or close the connection.
 
-A stream for a channel the opener does not own (section 5), or a second
-stream for a channel the opener already has open, is declined the same way.
+A stream for a channel the initiator does not own (section 5), or a second
+stream for a framed-JSON channel the initiator already has open, is declined
+the same way.
 
 | Code | Name | Sent as | Meaning |
 |---|---|---|---|
-| 1 | `not_interested` | STOP_SENDING | I do not read this channel, or you may not open it |
-| 2 | `malformed` | STOP_SENDING | Bad length, not one JSON object, a number outside the double range, or FIN inside a frame |
+| 1 | `not_interested` | STOP_SENDING | Do not open this channel again on this connection |
+| 2 | `malformed` | STOP_SENDING | Malformed stream; the channel may be reopened |
 
-No other codes are defined. Nothing closes the connection except the
-transport itself.
+No other codes are defined. Stream errors leave the connection open.
+Identity failures can close it as described in section 4.
 
-### 3.6 Keeping the connection up
+### 3.6 Connection keep-alive
 
-A golfer takes a minute between shots and longer between holes. QUIC
-closes a connection that has carried nothing for the negotiated idle
-timeout, and library defaults are 30 to 60 seconds, so a connection that
-only speaks when a ball is struck will be gone before the next swing.
-
-Endpoints MUST keep an idle connection alive with QUIC PING frames. Every
-library exposes this as a keep-alive interval; no application heartbeat
-message is defined because QUIC already has one. Endpoints MUST advertise
-an idle timeout of at least 60 seconds. The effective timeout is the
-smaller of the two peers' values, so both sides need the floor. A
-keep-alive every 15 seconds with an idle timeout of 90 seconds is
-RECOMMENDED.
+Endpoints MUST send QUIC PING frames at a 5-second keep-alive interval and
+MUST advertise `max_idle_timeout` of 30,000 milliseconds. CGP does not use
+an application heartbeat. Idle expiry follows [RFC 9000, section
+10.1](https://www.rfc-editor.org/rfc/rfc9000.html#section-10.1), including
+its minimum of three probe timeouts, so unanswered PINGs do not keep a dead
+peer's connection alive.
 
 ### 3.7 Streams and channels
 
-QUIC orders bytes within a stream and not across streams (RFC 9000,
-section 2). The rules below exist because of that.
+QUIC orders bytes within a stream, not across streams (RFC 9000, section 2).
 
 - Each side MUST send its `info` (channel 0) before opening any other
-  stream. A receiver MUST still accept messages that arrive before `info`,
-  because the network may reorder streams. `info` is informational; nothing
-  waits on it.
-- One stream per channel per direction per connection. A second stream
-  for a channel that is already open is declined with code 1.
-- After a stream ends, by FIN or reset, the sender MAY reopen the channel
-  on a new stream. Counters such as `shot_number` continue; they do not
-  restart.
-- On the two-way channel 2 only the opener writes the channel prefix. The
-  responder writes framed messages on the same stream and nothing else.
+  stream. Receivers MUST accept standard-channel messages that arrive
+  before `info`. Standard channels do not wait for the peer's `info`.
+- Standard channels and framed-JSON custom contracts allow one stream per
+  channel per direction. A second one while the first is open is declined
+  with code 1. Raw contracts may use concurrent streams (section 6.3).
+- After a stream ends by FIN or reset, the sender MAY reopen the channel
+  unless it received code 1 for that channel on this connection. Reopening
+  does not change shot identity.
+- On a bidirectional stream, only the stream initiator writes the channel
+  prefix. Its peer writes directly in the contract's format.
 
 ### 3.8 Versions
 
-The ALPN string names the wire format. While this document is a draft,
-each draft has its own string, `common-golf/draft-1`, `common-golf/draft-2`,
-and drafts MAY break each other. Two peers on different drafts fail the
-QUIC handshake, which is the intended failure: nothing half-works.
+The ALPN identifier selects the wire format. Before version 1.0, each draft
+has its own identifier, and drafts MAY introduce incompatible changes.
 
-The string moves only for a change that is not additive: a field or
-channel removed or renamed, or a meaning changed. Adding an optional field
-or a channel does not move it. Every string so far, and why it moved:
+A client MAY offer several identifiers and a server MAY accept several.
+TLS ALPN selects one according to the server's preference. The selected
+identifier applies to the whole connection; peers MUST NOT mix drafts within
+it. If no identifier is shared, the handshake fails.
 
-| ALPN | Protocol versions | Date | Why |
+A new identifier is required when a field or channel is removed, renamed or
+given a different meaning. Adding an optional field or channel does not
+change the identifier.
+
+| ALPN | Protocol versions | Release date | Changes |
 |---|---|---|---|
 | `common-golf/draft-1` | 0.1.0, 0.1.1 | 2026-10-11 | First draft |
-| `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` removed from channel 1, replaced by `estimated` on channels 1 and 3 (#2) |
+| `common-golf/draft-2` | 0.2.0 | 2026-10-17 | `reduced_accuracy` on channel 1 replaced by `estimated` on channels 1 and 3 (#2) |
+| `common-golf/draft-3` | 0.3.0 | Unreleased | Mutual raw public keys, required discovery key, no SNI dependence, new timers, UUIDv7 shot identity without `final`, server-menu custom channels replacing channel 2, renamed state channels with capture mode and lie |
 
-At 1.0 the string becomes `common-golf/1`. From then on every change under
-that string is additive: new optional fields, new channels. The rules that
-receivers ignore unknown fields and decline unknown channels make that safe
-without any further negotiation. A change that cannot be additive gets
-`common-golf/2`.
+Version 1.0 uses `common-golf/1` and permits only additive changes under
+that identifier. Incompatible changes require `common-golf/2`.
 
-`protocol_version` in `info` is for people and logs. Implementations MUST
-NOT make decisions on it; the ALPN already did.
+`protocol_version` in `info` is informational and intended for display and
+logging. Implementations MUST NOT use it to select protocol behavior.
 
-## 4. Trust
+### 3.9 Connection lifecycle
 
-Identity is the peer's Ed25519 public key: 32 bytes, written as 64
-lowercase hex characters. Call it the fingerprint, since that is what
-everyone will call it anyway. It is the key itself, not a hash of it and
-not a hash of the certificate.
-
-That is on purpose. A certificate also carries a serial number, dates and
-a name, so the same key wrapped twice would differ, and regenerating a
-certificate would change a device's identity. The handshake proved
-possession of the key; the certificate was only the envelope. Keying on
-the bare key also means one registration covers an implementation that
-presents the same key through a different transport, through a raw
-public key handshake, or in another protocol that identifies peers by
-Ed25519 key, of which there are several.
-
-Each endpoint MAY keep a list of fingerprints it knows, each with a tier:
-
-| Tier | Meaning |
+| Step | What happens |
 |---|---|
-| `internal` | The vendor's own software |
-| `developer` | A registered third party |
-| `maker` | Everyone else, including peers that presented no certificate |
+| 1. Handshake | ALPN selects one draft. Both endpoints present and authenticate Ed25519 raw public keys (section 3.3). |
+| 2. Identity | The client MUST match the advertised server key to the handshake key, or close before opening any channel (section 4). |
+| 3. `info` | Each side's first stream is channel 0. The server's first `info` carries the custom-channel menu chosen for that peer (section 6.2). |
+| 4. Use | Each side opens the channels it owns; each receiver keeps or declines each stream. |
 
-An endpoint decides which channels to open toward a peer, and which to read
-from it, by that peer's tier. A device might send plain shots to makers and
-also club data and a private diagnostics channel to developers. A
-tournament simulator might accept shots only from fingerprints it has
-registered as real hardware.
+After sending its own `info`, an endpoint MAY send standard traffic, and the
+server MAY open offered custom channels, without waiting for the peer's
+`info`. There is no additional selection, acknowledgement or ready exchange.
+A client MUST receive and validate the server's menu before opening a
+custom channel or sending a custom datagram. Hints such as `reads` and
+`reads_contracts` MUST NOT become a startup prerequisite.
 
-An endpoint that keeps no list treats every peer as a maker and is
-conforming. Registration is out of scope: a vendor can accept fingerprints
-by email, a web form, or a file. Revocation is removing a line.
+A receiver MUST NOT decline a custom stream only because the server's menu
+has not arrived. It MUST hold the stream unread until the menu arrives and
+is validated, then keep or decline it. If the initial menu is invalid,
+custom channels are unavailable and held streams are declined with code 1.
+Custom datagrams that arrive before the menu are discarded.
 
-Be clear about what a fingerprint proves. The TLS handshake proves the
-peer holds the private key for the public key it showed. A fingerprint on
-your list therefore means "this is the holder I registered." A fingerprint
-not on your list means only "this is not one I know"; it says nothing
-about what the peer is. Accepting unknown peers as makers is a choice to
-serve them anyway, not a judgement that they are devices. A device name
-you recognise arriving with a fingerprint you do not is a new, unknown
-device, and an implementation that keeps a list SHOULD surface that to the
-user rather than trust it silently. This is the rule SSH uses for known
-hosts, and it is sufficient.
+## 4. Identity and access policy
 
-This is the whole security model. There are no signatures inside messages,
-no nonces, no canonical JSON. If a device keeps its key in hardware,
-matching its fingerprint means talking to that device.
+A peer's identity is its Ed25519 public key. Its fingerprint is the 32-byte
+key encoded as 64 lowercase hex characters, rather than a hash of the key or
+its SubjectPublicKeyInfo encoding. The same fingerprint identifies the key
+across transports and protocols.
+
+**Application note:** Applications can restrict custom channels to known
+peer identities and tailor the channel menu for internal private
+communications, partnerships, tournaments or other purposes. Use the
+peer's authenticated fingerprint to select the contracts offered on each
+connection.
+
+Authentication proves possession of a private key. It does not establish
+that a peer is a physical device. A familiar device name with
+an unrecognized fingerprint represents a new identity. An implementation
+that remembers peer identities SHOULD notify the user of this change.
+
+The advertised `key` (section 3.2) allows clients to label or filter
+discovered servers using local policy before connecting. The advertisement is
+unauthenticated: a client MUST NOT treat it as authentication and MUST
+compare it with the handshake key. If the keys differ, the client MUST
+close the connection before opening any channel and report the server as
+an unknown device. It MAY rediscover and retry once to account for stale
+discovery records after a key change. A client SHOULD retain and try
+every advertisement claiming a given key so that a false advertisement
+cannot hide a legitimate server.
+
+A key may identify an organization or product line rather than a single
+device. Multiple servers can present the same key; a client MUST NOT
+merge them or choose between them by key alone. Key rotation requires
+updating any local policy associated with the old fingerprint. Expiration
+is a local policy.
+
+Message authentication relies on the transport. CGP adds no per-message
+signatures, nonces or JSON canonicalization.
 
 ## 5. Channels
 
-A channel is an unsigned integer carried at the start of a stream. Each
-standard channel has one owner, who opens the stream, and one direction.
-One-way channels use QUIC unidirectional streams. To use a channel, open a
-stream, write the channel ID, write messages. There is no negotiation.
+A channel is identified by an unsigned 32-bit integer at the start of a
+stream. Each standard channel has one owner and one direction. The owner
+opens a QUIC unidirectional stream, writes the channel ID, then sends
+messages.
 
-| ID | Name | Opened by | Flows | Stream | Max message | Needed for play |
-|---|---|---|---|---|---|---|
-| 0 | `info` | either | opener to peer | one-way | 65,535 | yes, first message |
-| 1 | `shot` | device | device to sim | one-way | 65,535 | yes |
-| 2 | `open_connect` | device | both ways | two-way | 65,535 | no, compatibility |
-| 3 | `club` | device | device to sim | one-way | 65,535 | no |
-| 4 | `status` | device | device to sim | one-way | 65,535 | no |
-| 5 | `control` | controller | controller to sim | one-way | 65,535 | no |
-| 6 | `state` | sim | sim to device | one-way | 65,535 | no |
-| 7 | `result` | sim | sim to device | one-way | 65,535 | no |
-| 8 | `flight` | device | device to sim | one-way | 65,535 | no |
-| 9 to 999 | reserved | | | | | |
-| 1000 and up | private | either | any | any | own | no |
+| ID | Name | Contract | Opened by | Flows | Stream | Max message | Needed for play |
+|---|---|---|---|---|---|---|---|
+| 0 | `info` | `io.common-golf.info-v1` | either | stream initiator to peer | one-way | 65,535 | yes, first message |
+| 1 | `shot` | `io.common-golf.shot-v1` | device | device to sim | one-way | 65,535 | yes |
+| 2 | reserved | | | | | | |
+| 3 | `club` | `io.common-golf.club-v1` | device | device to sim | one-way | 65,535 | no |
+| 4 | `device_status` | `io.common-golf.device-status-v1` | device | device to sim | one-way | 65,535 | no |
+| 5 | `control` | `io.common-golf.control-v1` | controller | controller to sim | one-way | 65,535 | no |
+| 6 | `simulator_state` | `io.common-golf.simulator-state-v1` | sim | sim to device | one-way | 65,535 | no |
+| 7 | `result` | `io.common-golf.result-v1` | sim | sim to device | one-way | 65,535 | no |
+| 8 | `flight` | `io.common-golf.flight-v1` | device | device to sim | one-way | 65,535 | no |
+| 9 to 999 | reserved | | | | | | |
+| 1000 and up | custom | per connection | contract | contract | contract | contract | no |
 
-Every simulator MUST read channel 1. A simulator MAY also offer channel 2.
-A device MUST write channel 0 and then channel 1 or channel 2. Everything
-else is optional and independent.
+The Contract column identifies the documented message contracts. ALPN
+defines channels 0, 1 and 3 to 8; their contract identifiers are not sent or
+negotiated, and a custom-channel menu cannot redefine them. Receivers MUST
+decline streams on channel 2 and channels 9 to 999 with code 1. These are
+reserved for future standard channels.
 
-Channels 1 and 2 may both be open on one connection, but a device MUST NOT
-send the same shot on both: a simulator cannot reliably match an Open
-Connect `ShotNumber` to a `shot_number` and would count it twice. A device
-SHOULD use one shot channel per connection, channel 1 by default. Section
-5.2 says what channel 2 is for.
+Every simulator MUST read channel 1. A launch monitor may send shots on
+channel 1, on the Open Connect contract (section 6.5), or both, including
+the same shots. Other channels are optional.
 
 Rules for every standard channel:
 
-- One JSON object per message. Every object on channels 0, 1, 3 to 8 has a
-  `type` string equal to the channel name. Channel 2 carries foreign JSON
-  with no envelope.
+- One JSON object per message, with a `type` string equal to the channel
+  name.
 - Receivers MUST ignore fields they do not know.
-- Senders MUST NOT send fields with the wrong unit under a known name.
-- Nothing is acknowledged. A sender never waits for a reply. Where a
-  simulator has something to say about a shot, it publishes a `result` on
-  its own channel, and a device that cares correlates by `shot_number`.
+- Senders MUST NOT send a value in a unit other than the one its field name
+  states.
+- Standard messages require no acknowledgement, and senders do not wait
+  for replies. Simulators publish shot outcomes as `result` messages,
+  correlated by `shot_uuid`.
 
-JSON Schema for each channel is in `schema/`.
+JSON Schemas for each channel are in `schema/`.
+
+**Shot identity.** Channels 1, 3, 7 and 8 identify a shot by `shot_uuid`.
+The source generates a new UUIDv7
+([RFC 9562, section 5.7](https://www.rfc-editor.org/rfc/rfc9562.html#section-5.7))
+for each shot. Every message about that shot, including club data, flight
+and results, MUST reuse it, as MUST updates and replays across stream
+reopenings and reconnects.
+
+A `shot_uuid` MUST be exactly 36 lowercase ASCII characters in hyphenated
+`8-4-4-4-12` form with version 7 and the RFC variant. The decoded JSON
+string MUST match:
+
+```text
+^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+```
+
+For example, `017f22e2-79b0-7cc3-98c4-dc0c0c07398f`. Uppercase, braces, URN
+prefixes, missing hyphens and other versions are invalid. Receivers compare
+strings byte for byte and MUST NOT normalize an invalid spelling. An invalid
+`shot_uuid` is malformed (section 3.4). The schemas enforce both length and
+pattern independently of format validation.
+
+The timestamp inside a UUIDv7 is not the measurement time; receivers MUST
+NOT use it as one, or to order snapshots. `measured_at` carries the
+measurement time when known (section 7).
+
+**Snapshots.** Messages with the same `shot_uuid` on the same channel are
+successive snapshots, ordered by receipt, including across stream
+reopenings. Receivers MAY accept replacements or retain the first snapshot
+and ignore later ones. A receiver that accepts a replacement MUST replace
+the whole snapshot without merging fields or counting an additional shot.
+Omitted optional fields are removed. The same UUID on another channel
+correlates messages without replacing them. Snapshots can be used
+immediately; there is no completion marker.
 
 ### 5.0 Channel 0: `info`
 
-The first message each side sends, on the first stream it opens. Required.
+Each endpoint sends `info` as its first message on its first stream.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `protocol_version` | string | yes | Semver of this document, `0.2.0` |
+| `protocol_version` | string | yes | `0.3.0` |
 | `name` | string | | Display name |
 | `vendor`, `model`, `serial`, `firmware_version` | string | | |
 | `channels` | array of integer | | Channels this side intends to open |
+| `reads` | array of integer | | Standard channels (0, 1, 3 to 8) this side reads |
+| `contracts` | array of objects | | Server's custom-channel menu; section 6.2 |
+| `reads_contracts` | array of string | | Custom contract identifiers this side reads; section 6.2 |
 
 ```json
-{"type": "info", "protocol_version": "0.2.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
+{"type": "info", "protocol_version": "0.3.0", "name": "Garage LM", "vendor": "Garage Labs", "model": "GL-1", "channels": [0, 1, 4]}
 ```
+
+`reads` and `reads_contracts` describe receive capabilities, not permissions,
+preferences or acknowledgements. An absent list provides no information.
+An empty `reads` list indicates that no standard channels are
+read; an empty `reads_contracts` list indicates that no custom contracts are
+read. A sender can use the hints to avoid unwanted streams or open a stream
+and accept a decline.
 
 ### 5.1 Channel 1: `shot`
 
-What the device measured at launch. Nothing computed about flight belongs
-here; that is channel 8.
+Ball measurements at launch. Computed flight is sent on channel 8.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `shot_number` | integer | yes | Increments per device per connection |
+| `shot_uuid` | string | yes | UUIDv7; section 5 |
 | `ball_speed_meters_per_second` | number | yes | |
 | `vertical_launch_angle_degrees` | number | yes | Positive is up |
 | `horizontal_launch_angle_degrees` | number | yes | Positive is right of target |
 | `total_spin_revolutions_per_minute` | number | with axis | Positive is backspin, negative is topspin |
-| `spin_axis_degrees` | number | with total | -90 to 90. 0 is no curve; positive curves right, whatever the sign of total |
+| `spin_axis_degrees` | number | with total | -90 to 90. 0 is no curve; positive curves right, regardless of total spin sign |
 | `backspin_revolutions_per_minute`, `sidespin_revolutions_per_minute` | number | | Only in addition to total and axis; positive sidespin curves right |
-| `measurement_id` | string | | Globally unique; lets a simulator dedupe across reconnects |
-| `measured_at_nanoseconds` | integer | | Nanoseconds since an unspecified epoch; monotonic is fine |
-| `player_dexterity` | `right`, `left`, `unknown` | | See section 7 |
-| `tee_position` | `tee`, `mat`, `ground`, `unknown` | | Where the ball was struck from |
-| `estimated` | array of string | | Names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy. See section 7 |
-| `final` | boolean | | See below. Absent means final |
-| `shot_kind` | `full`, `putt`, `chip` | | |
+| `measured_at` | string | | UTC RFC 3339 measurement time; omit if unknown |
+| `player_dexterity` | `right`, `left` | | Omit when unknown; section 7 |
+| `ball_lie` | `tee`, `fairway`, `putting_green`, `sand`, `rough` | | Known hitting-area lie; omit when unknown |
+| `estimated` | array of string | | Numeric fields not measured or of reduced accuracy; section 7 |
 
-Spin has one canonical form: total and axis, sent together or not at all,
-in the convention launch monitors and golfers already use. The sign of
-total says backspin or topspin. The sign of the axis says which way the
-ball curves, and it means that regardless of the sign of total. Zero total
-carries axis 0. A consumer that wants components computes:
+`ball_lie` identifies the hitting surface, including simulated sand or
+rough, so the simulator can avoid applying an effect already present in the
+measured launch. It does not request a ball position or specify a penalty.
+Sources omit unknown lies rather than infer them from measurements.
+
+Spin uses a canonical total-and-axis representation. Both fields are sent
+together or omitted together. Total spin is positive for backspin and
+negative for topspin. The axis sign indicates curve direction regardless of
+the total spin sign. Zero total spin requires an axis of 0. Components can
+be calculated as:
 
 ```
 backspin = total × cos(axis)
@@ -426,72 +480,39 @@ total = sign(backspin) × sqrt(backspin² + sidespin²)    (zero backspin counts
 axis  = atan2(sidespin, |backspin|) in degrees
 ```
 
-Consumers never convert.
+Receivers can use the canonical representation directly.
 
-For example, a putting device that measures speed and horizontal direction
-but not launch angle can estimate the vertical angle as zero and mark that
-field in `estimated`, following section 7. Optional unmeasured values, such
-as spin, can be omitted. The example supplies all three required launch
-measurements and uses the existing `shot_kind` field:
+A putting device that measures speed and direction but not launch angle can
+send a vertical angle of zero and mark it estimated. Optional unmeasured
+values, such as spin, are omitted:
 
 ```json
-{"type": "shot", "shot_number": 13, "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"], "shot_kind": "putt"}
+{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 2.1, "horizontal_launch_angle_degrees": 0.4, "vertical_launch_angle_degrees": 0, "estimated": ["vertical_launch_angle_degrees"]}
 ```
 
-A device MAY send more than one `shot` for the same `shot_number` as its
-estimate refines, each with `final: false` until the last, which carries
-`final: true`. Each message is a complete snapshot that replaces the
-previous one for that `shot_number`; nothing is merged, so a field present
-in the preliminary and absent in the final is gone. A simulator that does
-not want preliminaries ignores messages with `final: false`.
+A device MAY send updated measurements using the same `shot_uuid`. Each
+update is a complete snapshot (section 5):
 
 ```json
-{"type": "shot", "shot_number": 12, "ball_speed_meters_per_second": 67.3, "vertical_launch_angle_degrees": 12.1, "horizontal_launch_angle_degrees": -1.4, "total_spin_revolutions_per_minute": 2750, "spin_axis_degrees": -3.2, "player_dexterity": "right", "measurement_id": "2f1c…"}
+{"type": "shot", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "ball_speed_meters_per_second": 67.3, "vertical_launch_angle_degrees": 12.1, "horizontal_launch_angle_degrees": -1.4, "total_spin_revolutions_per_minute": 2750, "spin_axis_degrees": -3.2, "player_dexterity": "right", "measured_at": "2022-02-22T19:22:21.950Z"}
 ```
 
-### 5.2 Channel 2: `open_connect`
+### 5.2 Channel 2: reserved
 
-GSPro Open Connect v1 JSON, carried verbatim in both directions on one
-two-way stream. The device writes the launch monitor body; the simulator
-writes the `{Code, Message, Player}` reply. Field names, casing and units
-are exactly as GSPro documents them. Nothing is translated.
-
-This channel is a bridge for firmware that only emits Open Connect JSON,
-so that such a device changes only its socket. It is not the baseline;
-channel 1 is. A device that can speak channel 1 SHOULD, and a new device
-has no reason to implement channel 2 at all.
-
-A simulator MAY offer this channel. One that does MUST reply to each body
-the way GSPro would, because Open Connect devices expect it. That is the
-one place in this document where a reply is required, and it is inherited.
-A simulator that does not offer it declines the stream with code 1, and
-the device has no fallback: it reports that this simulator does not
-support Open Connect compatibility, which is the same experience as a
-refused TCP socket today. A device that can speak both MAY try channel 2
-first and fall back to channel 1 when declined, but never runs both for
-the same shots.
-
-The device writes the channel prefix when it opens the stream. The
-simulator writes only framed replies.
-
-```json
-{"DeviceID": "Garage LM", "Units": "Yards", "ShotNumber": 12, "APIversion": "1", "BallData": {"Speed": 150.5, "SpinAxis": -3.2, "TotalSpin": 2750, "HLA": -1.4, "VLA": 12.1}, "ShotDataOptions": {"ContainsBallData": true, "ContainsClubData": false}}
-```
-
-```json
-{"Code": 200, "Message": "Shot received"}
-```
+Receivers MUST decline channel 2 with code 1. A menu entry assigning it is
+malformed. Open Connect is a custom contract (section 6.5).
 
 ### 5.3 Channel 3: `club`
 
-What the device measured about the club. Every field is optional. With
-`shot_number` it describes the club at impact for that shot. Without it,
-and with `swing_number`, it is a standalone swing from a device with no
-ball data, such as a swing-speed radar.
+Club measurements. All fields other than `type` are optional. A `shot_uuid`
+shared with a `shot` associates the club measurements with that impact. A
+standalone swing from a device without ball data, such as a swing-speed
+radar, MAY carry its own `shot_uuid`. Messages without a UUID cannot be
+correlated or replaced.
 
 | Field | Notes |
 |---|---|
-| `shot_number` or `swing_number` | integer |
+| `shot_uuid` | UUIDv7, shared with the related shot or generated for a standalone swing |
 | `club_speed_meters_per_second` | |
 | `angle_of_attack_degrees` | Positive is upward |
 | `club_path_degrees` | Positive is right of target |
@@ -508,47 +529,81 @@ ball data, such as a swing-speed radar.
 | `speed_at_impact_meters_per_second` | |
 | `face_impact_horizontal_millimeters`, `face_impact_vertical_millimeters` | Positive is toe and up |
 | `closure_rate_degrees_per_second` | |
-| `player_dexterity` | See section 7 |
-| `estimated` | As on channel 1: names of numeric fields the device could not measure for this shot, or believes to have reduced accuracy |
-| `final` | As on channel 1: each message for a `shot_number` replaces the previous one whole |
-
-Timing guidance (informative). For low latency, a simulator can start an
-accepted ball shot from channel 1 without waiting for optional club data on
-channel 3. Club data supports post-shot analysis. Sending available club
-data promptly, and aiming to finish useful refinements within ten seconds
-of the shot or before the next shot, whichever comes first, keeps that
-analysis timely. This is
-application guidance, not a protocol deadline or a receiver timeout. The
-existing `final` flag and whole-snapshot replacement rules still apply.
-
-A standalone club tracker has its own connection and `swing_number`
-sequence. It is not automatically correlated with another device's
-`shot_number`. Associating a nearby swing with a ball shot for display is a
-local heuristic; it need not delay ball simulation or change either
-device's counters.
+| `player_dexterity` | Section 7 |
+| `estimated` | As on channel 1 |
 
 ```json
-{"type": "club", "swing_number": 3, "club_speed_meters_per_second": 47.1}
+{"type": "club", "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "club_speed_meters_per_second": 47.1}
 ```
 
-### 5.4 Channel 4: `status`
+A simulator can process channel 1 without waiting for club data. A
+standalone club tracker's `shot_uuid` does not correlate with another
+device's ball shot; any pairing for display is a local heuristic.
 
-Device state. Sent in full when the stream opens, then as patches: only
-the fields that changed. An absent field is unchanged, a `null` field is
-cleared. All optional.
+### 5.4 Channel 4: `device_status`
 
-| Field | Type |
+This channel is optional. A device MAY leave it unopened and send
+no device status. Because the device opens this channel, opting out requires
+no decline message. Simulators MUST NOT require this channel for play.
+
+Simulators SHOULD handle an unopened `device_status` channel without an
+error, warning, or startup wait. Play continues without device status,
+using the unavailable-value defaults below.
+
+For example, a simple launch monitor that is always ready, needs no capture
+mode selection, and provides no pre-impact ball detection, placement feedback,
+or battery status can exchange `info` and send `shot` messages without ever
+opening channel 4. It need not report uptime or send placeholder status values.
+A device without ball detection SHOULD omit `ball_detected` rather than send a
+fixed value.
+
+Device state uses patches. The device sends a complete snapshot when the
+stream opens, followed by changed fields only. An omitted field remains
+unchanged, `null` clears a value, and a nested object replaces the previous
+object in full. All fields other than `type` are optional.
+
+| Field | Notes |
 |---|---|
-| `ready` | boolean |
-| `ball_detected` | boolean |
-| `battery_percent` | number |
-| `uptime_seconds` | number |
-| `message` | string, human readable |
+| `ready` | Whether the device is ready to capture |
+| `capture_mode` | Mode in effect: `full`, `short`, or `putting` |
+| `ball_detected` | Whether the device detects a ball |
+| `ball_zone` | `{x_meters, y_meters, width_meters, height_meters}`: the usable placement region; width and height are nonnegative |
+| `ball_position` | `{x_meters, y_meters}`: the detected ball position |
+| `battery_percent` | 0 to 100 |
+| `uptime_seconds` | Nonnegative |
+| `message` | Human-readable device message |
+
+Simulators SHOULD treat unavailable `ready` or `ball_detected` values (not
+yet reported, including when this channel is unopened, or cleared with
+`null`) as `true` for play and UI behavior.
+Readiness or ball-detection UI and user prompts SHOULD appear only while
+the corresponding value is explicitly `false`.
+
+Positions use a local capture-area coordinate system with an origin defined
+and documented by the device. Positive x points right of the target line,
+and positive y points forward along it. These coordinates report device
+state; they do not set course positions or command ball placement. Omitted
+coordinates provide no information about placement requirements.
+
+`capture_mode` reports the mode actually in effect, whether or not the
+simulator requested it (section 5.6). It is not an acknowledgement.
+
+A device that reports readiness only:
+
+```json
+{"type": "device_status", "ready": true}
+```
+
+A device that provides ball detection and placement feedback can report:
+
+```json
+{"type": "device_status", "ready": true, "capture_mode": "putting", "ball_detected": true, "ball_zone": {"x_meters": -0.1, "y_meters": 0, "width_meters": 0.2, "height_meters": 0.3}, "ball_position": {"x_meters": 0, "y_meters": 0.1}}
+```
 
 ### 5.5 Channel 5: `control`
 
-Virtual buttons, from a control box, a touch surface, or a device with
-buttons on it, to the simulator.
+Button events sent to the simulator by a control box, touch surface or
+device controls.
 
 | Field | Values |
 |---|---|
@@ -563,44 +618,47 @@ buttons on it, to the simulator.
 | View | `flyover`, `shot_cam`, `scorecard`, `heatmap`, `map`, `green_grid`, `pin`, `hide_ui` |
 | UI | `select`, `back` |
 
-`down` and `up` are meaningful for the four aim commands, which repeat
-while held. Everything else is a `press`. A simulator MUST ignore commands
-it does not know, so a controller can send anything and only the supported
-subset takes effect. Nothing is namespaced; a vendor with private buttons
-uses a private channel.
+`down` and `up` apply to the four aim commands, which repeat while held. All
+other commands use `press`. A simulator MUST ignore commands it does not
+know. Vendor-specific buttons use a custom channel.
 
 ```json
 {"type": "control", "command": "left", "event": "down"}
 ```
 
-### 5.6 Channel 6: `state`
+### 5.6 Channel 6: `simulator_state`
 
-Simulator context. Sent in full when the stream opens, then as patches:
-only the fields that changed. An absent field is unchanged, a `null` field
-is cleared, and a nested object such as `player` replaces the previous
-object whole rather than merging into it. All fields optional.
+Simulator state uses the same patch rules as channel 4. All fields other
+than `type` are optional.
 
 | Field | Notes |
 |---|---|
-| `ready` | The simulator will act on a shot right now |
-| `player` | `{name, dexterity}` |
-| `club` | `{id, name}`; `id` uses the common abbreviations `DR`, `3W`, `7I`, `PW`, `PT` |
-| `mode` | `range`, `course`, `putting` |
-| `ball_zone` | `{x_meters, y_meters, width_meters, height_meters}` where the ball should be placed, in the device's frame. Optional, and clunky for users; prefer devices that do not need it |
+| `ready` | The simulator will act on a shot now; not a device arm/disarm command |
+| `player` | `{name, dexterity}`; dexterity is `right` or `left`, omitted when unknown |
+| `distance_to_target_meters` | Nonnegative distance from the ball to the pin or aim point |
+| `requested_capture_mode` | `full`, `short`, or `putting`; `null` clears the request |
+
+A device MAY use or ignore the requested capture mode. The simulator MUST
+NOT wait for an acknowledgement. The request does not control readiness;
+`device_status.capture_mode` reports the active mode. Clearing a request
+returns mode selection to device policy.
+
+Club selection and game mode require custom contracts. This specification
+defines no mapping from either to a capture mode.
 
 ```json
-{"type": "state", "ready": true, "mode": "course", "player": {"name": "Chad", "dexterity": "right"}, "club": {"id": "PT"}}
+{"type": "simulator_state", "ready": true, "player": {"name": "Alex", "dexterity": "right"}, "distance_to_target_meters": 3.048, "requested_capture_mode": "putting"}
 ```
 
 ### 5.7 Channel 7: `result`
 
-The simulator's computed outcome for a shot. Published when the simulator
-has it. This is not an acknowledgement: a device MUST NOT treat silence as
-either success or failure.
+The simulator publishes a `result` when a shot outcome is available. Results
+are optional; a device MUST NOT treat the absence of a result as success or
+failure.
 
 | Field | Notes |
 |---|---|
-| `shot_number` | required |
+| `shot_uuid` | Required |
 | `accepted` | boolean |
 | `reject_reason` | string, when not accepted |
 | `carry_distance_meters`, `total_distance_meters` | |
@@ -609,9 +667,9 @@ either success or failure.
 
 ### 5.8 Channel 8: `flight`
 
-The device's own computed ball flight, when it offers one. Kept apart from
-channel 1 so a simulator that runs its own physics never confuses a
-measurement with a derived value. `shot_number` required, rest optional.
+Ball flight computed by the device. Channel 8 separates derived flight
+values from the launch measurements on channel 1. `shot_uuid` is required;
+all other fields except `type` are optional.
 
 | Field |
 |---|
@@ -619,84 +677,237 @@ measurement with a derived value. `shot_number` required, rest optional.
 | `total_distance_meters`, `total_side_meters` |
 | `max_height_meters`, `curve_meters` |
 | `landing_angle_degrees`, `hang_time_seconds` |
-| `final`, as on channel 1: each message for a `shot_number` replaces the previous one whole |
 
-Trajectories as point arrays are deliberately not carried. They are library
-output; see OpenGolfCoach.
+Trajectory point arrays require a custom contract.
 
-## 6. Private channels: 1000 and up
+## 6. Custom channels: 1000 and up
 
-Channels 1000 and above belong to the two endpoints of a connection and to
-nobody else. Their meaning is whatever those two endpoints arranged, and
-the arrangement is scoped to that connection. Channel 1000 on a device's
-connection to vendor A's software can mean something unrelated to channel
-1000 on the same device's connection to vendor B's software. There is no
-registry and nothing to register.
+Channel numbers below 1000 are defined or reserved by this specification.
+Numbers from 1000 onward are assigned per connection by the server's menu.
+In its first `info`, the server binds each number to an exact contract
+identifier. The mapping applies in both directions.
 
-A private channel MAY carry JSON in this document's framing, or anything
-else; the receiver knows what to expect because it arranged it. Typical
-uses: diagnostics, licence and unlock traffic, firmware, raw sensor dumps,
-anything proprietary. All of it is already encrypted by the transport.
+A contract defines who opens streams, which way data flows, its maximum
+message size, and whether it uses framed JSON, raw streams, datagrams, or
+raw streams and datagrams. Endpoints implement contract definitions locally.
+Contract names do not negotiate behavior or determine whether the server
+sends or receives.
 
-The opener SHOULD send, as the first message on a private channel, a JSON
-object naming the arrangement so the peer can decline what it does not
-recognise:
+Device configuration, such as
+selecting a marked or markerless ball, belongs in a vendor contract,
+typically on the vendor application's own connection. Channel 6 carries
+simulator state.
+
+### 6.1 Contract identifiers
+
+An identifier names an application contract and its version, for example
+`com.example.diagnostics-v1`. It is independent of the software release.
+
+Identifiers MUST be 1 to 128 ASCII bytes of lowercase `a`–`z`, digits, `.`,
+`-` and `_`, that is `[a-z0-9._-]{1,128}`, measured after JSON string
+decoding. Receivers MUST validate this, MUST NOT repair invalid values by
+lowercasing or other normalization, and then MUST treat the identifier as
+opaque and compare it byte for byte. They MUST NOT parse domain labels or
+version suffixes, perform DNS lookups, or infer compatibility or
+authorization from the name.
+
+Identifiers SHOULD use a reversed domain controlled by the author and
+include a contract version, for example `com.garagelabs.diagnostics-v2`. An
+incompatible revision requires a new identifier. There is no separate
+version field or version-range matching.
+
+Identifiers beginning `io.common-golf.` are reserved for contracts this
+protocol defines; vendors MUST NOT assign them. Standardized vendor
+contracts receive a new identifier in this namespace and continue to use
+custom channel numbers. The new identifier does not alias the original.
+
+### 6.2 The menu
+
+The server's first `info` carries the menu as a `contracts` array of
+`{channel, contract}` entries:
 
 ```json
-{"type": "private", "name": "com.example.diagnostics", "version": "1.2.0"}
+{"type":"info","protocol_version":"0.3.0","contracts":[{"channel":1000,"contract":"io.common-golf.open-connect-v1"},{"channel":1001,"contract":"com.example.auth-v2"},{"channel":1002,"contract":"com.example.auth-v1"}]}
 ```
 
-A device SHOULD open private channels only toward peers whose tier
-warrants it (section 4).
+- `channel` MUST be an unsigned decimal integer literal from 1000 to
+  4294967295. Strings, fractions and exponents (`"1000"`, `1000.0`, `1e3`)
+  are invalid, as is any number below 1000.
+- Each number appears at most once. An identifier MAY appear on several
+  numbers. Array order has no meaning.
+- The menu contains at most 16 entries. The `info` message retains its
+  65,535-byte limit.
+- An absent `contracts` field or an empty array defines an empty menu.
+
+The server chooses the menu before sending `info`. The menu is fixed for
+the connection: any later server `info` MUST describe the same
+mappings, regardless of order. Closing a stream does not release its
+channel number. Changing the menu requires reconnection.
+
+A receiver MUST validate the whole menu before installing it. An invalid
+menu, or a later `info` that changes it, is malformed `info` (section 3.4,
+code 2). No partial menu is installed and an established one is never
+replaced. An invalid initial menu leaves custom channels unavailable for the
+connection; standard channels are unaffected.
+
+The client matches identifiers against the contracts it supports and uses
+any subset of the offered channels in the directions each contract allows.
+Selection is local and requires no acknowledgement. In the example above, a
+client selecting `com.example.auth-v2` uses channel 1001.
+
+A client MAY list the identifiers it reads in `reads_contracts` in its
+own `info`. This list does not assign channel numbers or change the menu.
+The server can use it to choose streams or open an offered stream and
+accept a decline.
+
+### 6.3 Reliable streams
+
+The stream initiator writes the four-byte channel ID once, then data in the
+contract's format. Framed-JSON contracts use section 3.4 framing and allow
+one stream per direction. Raw contracts add no envelope or length prefix,
+and MAY allow several concurrent streams on one channel. A bidirectional
+reply never repeats the prefix. A stream on an unbound channel, or one that
+violates its contract, is declined without closing the connection.
+
+A separate raw stream per record supports large or indivisible payloads,
+such as camera frames or trajectories. Senders can reset obsolete streams;
+receivers can use STOP_SENDING to cancel them. This confines head-of-line
+blocking to one record. Cancelling a record MUST use a code other than 1,
+which declines the entire channel for the connection.
+
+### 6.4 Datagrams
+
+QUIC DATAGRAM frames ([RFC
+9221](https://www.rfc-editor.org/rfc/rfc9221.html))
+are unreliable. Most endpoints never need them. A lost packet in QUIC
+delays only the streams whose data it carried, and every standard channel
+uses a stream. Use a datagram only for a sample that is useless once the
+next one exists, such as an aim reading, a high-rate sensor sample or an
+LED frame. If unsure, use a stream.
+
+Every endpoint MUST advertise `max_datagram_frame_size` of at least 1,200.
+All datagram channels share the connection's DATAGRAM facility. Each
+datagram is:
+
+| Offset | Length | Meaning |
+|---|---|---|
+| 0 | 4 | Channel ID, unsigned, big-endian |
+| 4 | 8 | Sequence number, unsigned, big-endian |
+| 12 | Remaining | Contract payload, possibly empty |
+
+Sequence numbers start at zero for each channel, direction and connection.
+They do not wrap: sends fail after 2^64 − 1. The counter is independent of
+`shot_uuid`. Datagrams may be lost, duplicated or reordered and have no
+ordering relative to streams. Receivers expose the sequence number for
+handling by the contract. Datagrams shorter than the header, or sent on
+unbound or unread channels, are discarded.
+
+A datagram occupies one QUIC packet and is never fragmented. Before path MTU
+discovery completes, the packet limit is 1,200 bytes. A contract MUST fit
+each datagram, including its header, within that packet; approximately 1,100
+payload bytes leaves room for overhead. Larger records use raw streams.
+Implementations expose the current payload limit and reject oversized sends.
+A sender MUST treat this rejection as a contract error, not packet loss.
+
+Datagrams are not flow controlled. Send queues are bounded per connection
+and per channel and served round-robin alongside reliable traffic. When a
+queue is full, the sender is notified and chooses which data to discard.
+Receivers discard datagrams that exceed their capacity.
+
+### 6.5 Open Connect
+
+`io.common-golf.open-connect-v1` carries GSPro Open Connect v1 bodies over
+CGP. The server assigns its channel number in the custom-channel menu; no
+number is reserved for Open Connect.
+
+| Property | Definition |
+|---|---|
+| Opened by | Device, regardless of its QUIC role |
+| Transport | One bidirectional reliable stream |
+| Device to simulator | Open Connect v1 bodies, plus optional `shot_uuid` |
+| Simulator to device | Open Connect `{Code, Message, Player}` replies, unchanged |
+| Framing | Section 3.4 length-prefixed JSON in both directions, no `type` envelope |
+| Maximum message | 65,535 bytes |
+
+Field names, casing, units and `ShotNumber` are as Open Connect defines
+them. A device MAY add `shot_uuid`; it MUST then follow section 5's format
+and retention rules, and MUST equal the UUID of the same shot on channel 1.
+Replies do not echo the UUID. A simulator that accepts the stream MUST send
+the Open Connect replies. A simulator acting as the QUIC client can list
+the identifier in `reads_contracts`.
+
+A bridge receiving this contract and forwarding its bodies to GSPro on TCP
+921 takes the simulator application role on its CGP connection, independently
+of its QUIC client/server role. It SHOULD strip `shot_uuid` unless the target
+GSPro version is known to accept unknown keys.
+
+Channel 1 and this contract are independent and MAY be used together for the
+same shots. CGP defines no preference between them.
+
+Device body, after the channel prefix and length:
+
+```json
+{"DeviceID": "Garage LM", "Units": "Yards", "ShotNumber": 12, "shot_uuid": "017f22e2-79b0-7cc3-98c4-dc0c0c07398f", "APIversion": "1", "BallData": {"Speed": 150.5, "SpinAxis": -3.2, "TotalSpin": 2750, "HLA": -1.4, "VLA": 12.1}, "ShotDataOptions": {"ContainsBallData": true, "ContainsClubData": false}}
+```
+
+Simulator reply, after its length:
+
+```json
+{"Code": 200, "Message": "Shot received"}
+```
+
+The bodies are described by
+[`schema/open_connect.json`](../schema/open_connect.json).
 
 ## 7. Units, frames and signs
 
-Every numeric field carries its unit in its name, spelled out:
-`_meters`, `_meters_per_second`, `_degrees`, `_revolutions_per_minute`,
-`_millimeters`, `_seconds`, `_nanoseconds`, `_percent`. There are no unit
-flags and no abbreviations. A field name is its documentation.
+Measurement fields spell out units in their names: `_meters`,
+`_meters_per_second`, `_degrees`, `_revolutions_per_minute`, `_millimeters`,
+`_seconds`, `_nanoseconds`, `_percent`. There are no unit flags and no
+abbreviations.
 
 All lateral quantities share one frame, independent of the player: the
-target line, viewed from behind the ball. Positive is right of target.
-This applies to horizontal launch angle, spin axis, sidespin, carry side,
-total side, club path, face angle, swing direction, low point side and
-D-plane tilt. For spin, the axis sign is the curve direction even when
-total spin is negative (topspin); section 5.1 has the decomposition.
+target line viewed from behind the ball, positive right of target. This
+covers horizontal launch angle, spin axis, sidespin, carry side, total side,
+club path, face angle, swing direction, low point side and D-plane tilt. The
+spin axis sign is the curve direction even when total spin is negative
+(section 5.1).
 
-`player_dexterity` travels alongside so a consumer can translate into the
-player's terms: for a right-handed player, positive club path is in-to-out
-and positive face angle is open; for a left-handed player each is the
-opposite. `unknown` is a legitimate value when the device cannot tell. The
-wire never carries two handed variants of a number.
+`player_dexterity` lets a consumer translate into the player's terms: for a
+right-handed player, positive club path is in-to-out and positive face angle
+is open; for a left-handed player each is the opposite. When the device
+cannot tell, it omits the field. The wire format uses the same values for
+both handednesses.
 
-Timestamps are nanoseconds since an epoch the sender does not have to
-define. Monotonic since boot is fine.
+`measured_at` is a UTC RFC 3339 timestamp, with fractional seconds when
+available. Omit it when the UTC time is unknown; never substitute uptime or
+the UUID's timestamp.
 
-A device that could not measure a value for this shot and sends one
-anyway, or that believes a value it sends has reduced accuracy, MUST name
-that field in `estimated`, on channels 1 and 3. This is the number a
-launch monitor shows in italics: indoor spin without a marked ball, a face
-angle inferred from path and spin. A sender MUST name only fields present
-in the message; a receiver ignores any other name. A consumer SHOULD
-present estimated values distinctly. A value
-computed exactly from fields that are themselves measured is not
-estimated; it is derived.
+A device that sends an unmeasured or reduced-accuracy value for a shot MUST
+name that field in `estimated` on channels 1 and 3. A sender MUST name only
+fields present in the message; receivers ignore other names. Consumers
+SHOULD distinguish estimated values in their displays. Exact calculations
+from measured fields are derived values and do not require an estimate
+marker.
 
-## 8. Compatibility with what exists
+## 8. Protocol mappings
+
+These mappings are informative guidance for adapters.
 
 ### 8.1 GSPro Open Connect v1
 
-Carried unchanged on channel 2. For a simulator that wants to normalise
-those bodies into channel 1 and 3 terms, with `Units: "Yards"` meaning mph,
-rpm, degrees and yards:
+The contract in section 6.5 carries Open Connect bodies directly. Adapters
+can instead map them to standard channels using the conversions below. For
+`Units: "Yards"`, source units are mph, rpm, degrees and yards.
 
 | Open Connect | Common Golf | Factor |
 |---|---|---|
-| `ShotNumber` | `shot_number` | |
+| `shot_uuid` (when present) | `shot_uuid` | Preserve |
+| `ShotNumber` (when `shot_uuid` is absent) | `shot_uuid` | Allocate a UUIDv7 per source shot and keep the mapping for related messages and updates |
 | `BallData.Speed` | `ball_speed_meters_per_second` | × 0.44704 |
 | `BallData.VLA` | `vertical_launch_angle_degrees` | |
 | `BallData.HLA` | `horizontal_launch_angle_degrees` | |
-| `BallData.TotalSpin` | `total_spin_revolutions_per_minute` | negative topspin carries over as is |
+| `BallData.TotalSpin` | `total_spin_revolutions_per_minute` | Negative topspin carries over |
 | `BallData.SpinAxis` | `spin_axis_degrees` | |
 | `BallData.BackSpin`, `SideSpin` | `backspin_…`, `sidespin_…` | |
 | `BallData.CarryDistance` | `flight.carry_distance_meters` | × 0.9144 |
@@ -706,127 +917,116 @@ rpm, degrees and yards:
 | `ClubData.FaceToTarget` | `face_angle_degrees` | |
 | `ClubData.Lie`, `Loft` | `lie_degrees`, `dynamic_loft_degrees` | |
 | `ClubData.SpeedAtImpact` | `speed_at_impact_meters_per_second` | × 0.44704 |
-| `ClubData.HorizontalFaceImpact`, `VerticalFaceImpact` | `face_impact_horizontal_millimeters`, `…_vertical_…` | unit undocumented; assume mm |
+| `ClubData.HorizontalFaceImpact`, `VerticalFaceImpact` | `face_impact_horizontal_millimeters`, `…_vertical_…` | Unit undocumented; assume mm |
 | `ClubData.ClosureRate` | `closure_rate_degrees_per_second` | |
-| `ShotDataOptions.LaunchMonitorIsReady` | `status.ready` | |
-| `ShotDataOptions.LaunchMonitorBallDetected` | `status.ball_detected` | |
+| `ShotDataOptions.LaunchMonitorIsReady` | `device_status.ready` | |
+| `ShotDataOptions.LaunchMonitorBallDetected` | `device_status.ball_detected` | |
 | Reply `Code 200` | `result.accepted: true` | |
-| Reply `Code 201` + `Player` | `state.player`, `state.club` | `RH`/`LH` to `right`/`left` |
+| Reply `Code 201` + `Player` | `simulator_state.player` | `RH`/`LH` to `right`/`left`; no club or capture-mode mapping |
+| Reply `Player.DistanceToTarget` | `simulator_state.distance_to_target_meters` | × 0.9144 when the unit is known to be yards; the reply has no unit label |
 
 ### 8.2 OpenGolfSim
 
 | OpenGolfSim | Common Golf |
 |---|---|
 | `shot.shot.ballSpeed` | `ball_speed_meters_per_second` (× 0.44704 when `unit` is imperial) |
-| `shot.shot.verticalLaunchAngle`, `horizontalLaunchAngle` | launch angles |
+| `shot.shot.verticalLaunchAngle`, `horizontalLaunchAngle` | Launch angles |
 | `shot.shot.spinSpeed` | `total_spin_revolutions_per_minute` |
-| `shot.shot.spinAxis` | `spin_axis_degrees`, **negated** (OpenGolfSim positive is left-curving) |
-| `device.status` | `status.ready` |
-| `player.data.club.{id,name}` | `state.club` |
+| `shot.shot.spinAxis` | `spin_axis_degrees`, **negated** (OpenGolfSim positive curves left) |
+| `device.status` | `device_status.ready` |
+| `player.data.club.{id,name}` | No mapping |
 | `result.data.result.{carry,total,lateral,height}` | `result.carry_distance_meters`, `total_distance_meters`, `carry_side_meters`, `max_height_meters` |
-| `control.command` `left right up down club-up club-down drop mulligan rehit` | `control.command` with hyphens replaced by underscores; `event` passes through |
+| `control.command` `left right up down club-up club-down drop mulligan rehit` | `control.command` with hyphens as underscores; `event` passes through |
 
 ### 8.3 OpenLaunch Nova
 
-Nova's WebSocket feed is already snake_case SI and maps by rename:
+Nova's WebSocket feed uses SI units and snake_case field names.
 `ball_speed_meters_per_second`, `vertical_launch_angle_degrees`,
-`horizontal_launch_angle_degrees` and `spin_axis_degrees` are identical;
-`total_spin_rpm` becomes `total_spin_revolutions_per_minute`, negative
-topspin included;
-`timestamp_ns` becomes `measured_at_nanoseconds`; `status.uptime_seconds`
-and `status.firmware_version` go to `status` and `info`. Nova's TCP API is
-Open Connect and goes on channel 2. Nova's touch bar maps to `control`:
-Left and Right to `left` and `right`, A to `reset_aim`, Y to `heatmap`.
+`horizontal_launch_angle_degrees` and `spin_axis_degrees` map directly.
+Rename `total_spin_rpm` to `total_spin_revolutions_per_minute`, preserving
+the topspin sign. Convert `timestamp_ns` to `measured_at` only when its
+epoch is known to be convertible to UTC. Assign each source shot a UUIDv7.
+
+Map `status.uptime_seconds` to `device_status` and `status.firmware_version`
+to `info`. Nova's TCP API uses Open Connect (section 6.5). Touch bar
+controls map as follows: Left to `left`, Right to `right`, A to `reset_aim`,
+and Y to `heatmap`.
 
 ### 8.4 OpenGolfCoach
 
-OpenGolfCoach consumes channel 1 fields directly except that it spells
-`total_spin_rpm`. Its `offline_distance_meters` is `carry_side_meters` here,
-same sign. Its handed output variants are a presentation of section 7's
-single frame plus `player_dexterity`.
+OpenGolfCoach consumes channel 1 fields directly except for
+`total_spin_revolutions_per_minute`, which it names `total_spin_rpm`. Its
+`offline_distance_meters` maps to `carry_side_meters` with the same sign.
+Translate handed output variants using the coordinate system in section 7
+and `player_dexterity`.
 
 ### 8.5 Recording to MCAP
 
-An optional recorder can save a session to [MCAP](https://mcap.dev/spec)
-without changing the CGP wire format. For standard channels and private
-channels carrying JSON, one recording convention is:
+Sessions can be recorded in [MCAP](https://mcap.dev/spec). The following
+convention stores JSON channels without their transport framing:
 
 | MCAP | Value |
 |---|---|
-| Schema | `encoding: "jsonschema"`, with data from the matching file under `schema/draft-2/`; use channel `schema_id: 0` when no schema is available |
-| Channel | A recorder-chosen `topic`, such as `<connection>/<sender>/shot`; `message_encoding: "json"`; string metadata such as `{"channel_id": "1", "alpn": "common-golf/draft-2"}` |
-| Message data | Original JSON payload bytes, excluding the CGP channel prefix and length header |
-| Message times | `log_time`: recorder receipt time in nanoseconds; `publish_time`: the same value when publication time is unavailable |
-| Message sequence | A recorder counter per recorded channel, or zero when unused; distinct from `shot_number` |
+| Schema | `encoding: "jsonschema"`, from the schema set for the connection's ALPN; `schema_id: 0` when none is available |
+| Channel | A recorder-chosen `topic` such as `<connection>/<sender>/shot`; `message_encoding: "json"`; metadata such as `{"channel_id": "1", "alpn": "common-golf/draft-3"}` |
+| Message data | The JSON payload, without the CGP channel prefix and length |
+| Message times | `log_time`: receipt time in nanoseconds; `publish_time`: the same when unknown |
+| Message sequence | A per-channel recorder counter, or zero; unrelated to `shot_uuid` |
 
-These labels and metadata are local to the recording, not additional wire
-fields. Including the connection and sender separates both directions of
-`info` and Open Connect traffic, and keeps different devices' shot counters
-apart. MCAP channel IDs are file-local and need not match CGP channel numbers.
-
-MCAP timestamps use an epoch understood by the recording's users. The
-payload's `measured_at_nanoseconds` stays unchanged: its epoch may be uptime,
-and measurement time is not necessarily publication or receipt time. The
-[MCAP encoding registry](https://mcap.dev/spec/registry) describes the JSON
-and JSON Schema encodings. Non-JSON private channels need their own recording
-encoding; this convention does not reinterpret their bytes as JSON.
+Including connection and sender in the topic separates both directions of
+`info` and Open Connect traffic. MCAP channel IDs are file-local. The
+payload's `measured_at` is left unchanged. Non-JSON custom channels need
+their own recording encoding. See the [MCAP encoding
+registry](https://mcap.dev/spec/registry).
 
 ### 8.6 OpenGolfAPI / OpenShot
 
 [OpenShot v0](https://opengolfapi.org/schemas/openshot/v0.json) describes a
-shot event with ball measurements and optional club, device, and context
-fields. Its ball units include mph, degrees, rpm, and yards, so an adapter
-maps fields and converts units to CGP. The published schema requires
-`api_version: "0"` and `ball`; an unchanged Open Connect object lacks those
-required fields. This comparison defines no additional CGP channel or
-transport binding.
+shot with ball measurements and optional club, device and context fields,
+using mph, degrees, rpm and yards. Adapters map fields and convert units.
+The schema requires `api_version: "0"` and `ball`; an Open Connect body
+requires conversion before it can be used as OpenShot.
 
 ### 8.7 Pureplay Connect v1
 
-[Pureplay Connect's specification](https://github.com/PureplayGolf/Pureplay-Connect#readme)
-defines fixed-unit binary telemetry. The following is an informative adapter
-mapping. `ValidMask` distinguishes measurements from unused stored values:
-a cleared field's zero is not a measurement. Unavailable optional fields can
-be omitted; section 5.1 illustrates estimating a required launch measurement.
+[Pureplay Connect](https://github.com/PureplayGolf/Pureplay-Connect#readme)
+is fixed-unit binary telemetry. `ValidMask` distinguishes measurements from
+unused fields; a cleared field's zero is not a measurement.
 
 | Pureplay Connect | Common Golf |
 |---|---|
-| `ShotId` | Allocate increasing `shot_number` values on each CGP connection; retain the source-session/`ShotId` mapping for related ball/club messages and updates |
+| `ShotId` | Allocate a UUIDv7 per source shot; keep the session/`ShotId` mapping across connections, related messages and updates |
 | `BallSpeedMS`, `VLA`, `HLA` | `ball_speed_meters_per_second`, `vertical_launch_angle_degrees`, `horizontal_launch_angle_degrees` |
 | `TotalSpinRPM`, `SpinAxisDeg` | Total and axis, after checking the source sign convention |
 | `BackSpinRPM`, `SideSpinRPM` without total and axis | Convert with section 5.1, preserving topspin sign |
 | `ClubHeadSpeedMS`, `SmashFactor` | `club_speed_meters_per_second`, `smash_factor` |
 | `DynamicLoftDeg`, `FaceAngleDeg`, `ClubPathDeg`, `AttackAngleDeg` | `dynamic_loft_degrees`, `face_angle_degrees`, `club_path_degrees`, `angle_of_attack_degrees` |
 | `ImpactPointXMM`, `ImpactPointYMM` | `face_impact_horizontal_millimeters`, `face_impact_vertical_millimeters`, same signs |
-| `ReadyState` | An enum (`NotReady`, `Ready`, `BallDetected`, `Processing`); mapping it to `status.ready` and `status.ball_detected` needs adapter policy |
-| `Heartbeat.Battery` | `status.battery_percent`; unknown (`0xFF`) is omitted initially or clears a prior value with `null` |
+| `ReadyState` | `NotReady`, `Ready`, `BallDetected`, `Processing`; mapping to `device_status.ready` and `ball_detected` is adapter policy |
+| `Heartbeat.Battery` | `device_status.battery_percent`; unknown (`0xFF`) is omitted, or `null` to clear |
 | `Hello.DeviceName`, `Firmware` | `info.name`, `info.firmware_version` |
-| `SetClubInfo` | Handedness maps to `state.player.dexterity`; club selection maps to `state.club` using CGP's club abbreviations |
-| `SetDetect` | Arm/disarm command; `state.ready` is simulator readiness, so conversion needs adapter policy rather than a direct rename |
-| `SetBallType` | Vendor configuration; section 6 |
-| `Error.Message` | `status.message` |
+| `SetClubInfo` | Handedness to `simulator_state.player.dexterity`; no club or capture-mode mapping |
+| `SetDetect` | An arm/disarm command; `simulator_state.ready` is simulator readiness, so mapping is adapter policy |
+| `SetBallType` | Vendor configuration (section 6) |
+| `Error.Message` | `device_status.message` |
 
-Pureplay's component gap-fill formula takes an unsigned square root for
-total spin and uses `atan2(side, back)` for axis. With negative backspin,
-that loses CGP's topspin sign and can put the axis outside CGP's range.
-Section 5.1 gives the CGP conversion from components. Pureplay's negative-total
-semantics are not explicit, and its worked spin example has opposite signs
-for sidespin and axis, so a direct total/axis copy depends on checking the
-source device's convention.
+Use the conversion in section 5.1 for component spin values. Pureplay's
+gap-fill formula can lose the topspin sign or produce an axis outside CGP's
+range. Verify the source device's sign convention before copying total spin
+and axis directly; Pureplay's documentation is ambiguous about negative
+total spin and the relationship between sidespin and axis.
 
-## 9. Not in this version
+## 9. Scope
 
-Datagrams. Telemetry streams. Media and video. Trajectory point arrays.
-Per-message signatures. Cloud or remote lookup of devices. Simulator-to-
-device configuration. Multiplayer, tournaments and scoring. CBOR or any
-non-JSON encoding on standard channels. Manual addressing in user
-interfaces, which section 3.2 argues against on purpose rather than
-deferring.
+This specification does not define:
 
-USB and Bluetooth bindings are not defined. A tether near the hitting area
-can be struck or pulled; wireless operation avoids that placement constraint.
-For future Bluetooth work, BLE is worth exploring before Bluetooth Classic,
-including a mapping of channels to GATT characteristics rather than assuming
-a serial-stream tunnel. Discovery, authentication, message boundaries, and
-payload limits would need their own specification. This is design guidance,
-not a claim that QUIC framing or trust transfers unchanged.
+- Standard telemetry, media or trajectory contracts. Custom streams and
+  datagrams can carry these payloads.
+- Per-message signatures.
+- Cloud or remote device discovery.
+- Standard device-configuration commands.
+- Multiplayer, tournaments or scoring.
+- Non-JSON encodings on standard channels.
+- USB or Bluetooth transports.
+
+Local discovery and the connection interface are defined in section 3.2.
