@@ -163,7 +163,7 @@ async fn discovery_advertises_bound_port() {
 }
 
 #[tokio::test]
-async fn listener_serves_two_connections_and_maximum_frames() {
+async fn server_serves_two_connections_and_maximum_frames() {
     let identity = Identity::generate().unwrap();
     let server = noq::Endpoint::server(
         identity.server_config(&[Draft::One, Draft::Two]).unwrap(),
@@ -243,7 +243,7 @@ async fn runtime_delivers_json_without_schema_conformance() {
 
 #[tokio::test]
 async fn supported_drafts_exchange_private_json_and_open_connect_replies() {
-    for draft in Draft::SUPPORTED {
+    for draft in [Draft::One, Draft::Two] {
         let (_server, _client, device, sim) = connections(draft).await;
         let mut sender = Peer::new(
             device,

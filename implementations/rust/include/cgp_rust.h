@@ -27,13 +27,14 @@ typedef void (CGP_CALL *cgp_callback)(void *context, uint32_t channel,
 CGP_API uint32_t CGP_CALL cgp_abi_version(void);
 CGP_API const char *CGP_CALL cgp_last_error(void);
 /* config: {identity_directory, role, draft, info}; role: simulator/device/
- * controller/device_controller; draft: 2 only; info: protocol info object. */
+ * controller/device_controller; draft: 2 or 3 (default 3); info: protocol info object. */
 CGP_API int32_t CGP_CALL cgp_create(const char *config, CgpEndpoint **out);
 /* Bounded discovery (1..60000 ms). Callback gets a JSON device descriptor.
  * Results arrive after the browse interval. No continuous background browse. */
 CGP_API int32_t CGP_CALL cgp_discover(CgpEndpoint *, uint32_t ms, cgp_callback, void *);
 /* Pass the discovered JSON descriptor and an independently trusted lowercase
  * 64-character Ed25519 key fingerprint. Overall deadline: 10 seconds.
+ * Draft 3 also requires descriptor properties.key to match the raw TLS key.
  * Pin verified before info/application data. One connection per endpoint. */
 CGP_API int32_t CGP_CALL cgp_connect(CgpEndpoint *, const char *device, const char *fingerprint);
 /* Standard JSON channels 0, 1, 3..8 only; length 1..65535. A successful send means

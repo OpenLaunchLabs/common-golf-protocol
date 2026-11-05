@@ -37,7 +37,7 @@ static struct in_addr wifi_address;
 
 typedef struct {
     struct sockaddr_in address;
-    char name[128];
+    char name[128], key[65];
     uint32_t generation;
 } discovered_peer;
 
@@ -133,6 +133,16 @@ static void discover_task(void *argument)
                 if (!is_demo_peer(result)) continue;
 #endif
                 if (!result->port) continue;
+                char key[65] = {0};
+                for (size_t i = 0; i < result->txt_count; ++i) {
+                    const mdns_txt_item_t *item = &result->txt[i];
+                    if (!item->key || strcmp(item->key, "key") || !item->value) continue;
+                    size_t length = result->txt_value_len ? result->txt_value_len[i] : strlen(item->value);
+                    if (length == 64) { memcpy(key, item->value, 64); key[64] = 0; }
+                }
+#if CONFIG_CGP_DRAFT == 3
+                if (!cgp_key_valid(key)) continue;
+#endif
                 for (mdns_ip_addr_t *ip = result->addr; ip; ip = ip->next) {
                     if (ip->addr.type != ESP_IPADDR_TYPE_V4) continue;
                     discovered_peer peer = {
@@ -143,6 +153,7 @@ static void discover_task(void *argument)
                         },
                         .generation = generation,
                     };
+                    memcpy(peer.key, key, sizeof(peer.key));
                     snprintf(peer.name, sizeof(peer.name), "%s",
                              result->instance_name ? result->instance_name :
                              (result->hostname ? result->hostname : "Common Golf peer"));
@@ -292,6 +303,9 @@ void app_main(void)
                         {"vendor", "Common Golf example"},
                         {"model", role_name(role)},
                         {"serial", serial},
+                        {"key", cgp_identity(engine)},
+                        {"alpn", CONFIG_CGP_DRAFT == 3 ? "draft-3" : CONFIG_CGP_DRAFT == 2 ? "draft-2" : "draft-1"},
+                        {"caps", role == CGP_LAUNCH_MONITOR ? "ball,club,flight" : "control"},
                     };
                     error = mdns_service_add(name, "_common-golf", "_udp", cgp_port(engine),
                                              txt, sizeof(txt) / sizeof(txt[0]));
@@ -312,7 +326,11 @@ void app_main(void)
         discovered_peer peer;
         while (xQueueReceive(discovered_peers, &peer, 0) == pdTRUE) {
             if (engine && peer.generation == engine_generation) {
+#if CONFIG_CGP_DRAFT == 3
+                cgp_connect_key(engine, &peer.address, peer.name, peer.key);
+#else
                 cgp_connect(engine, &peer.address, peer.name);
+#endif
             }
         }
         if (engine) cgp_poll(engine);

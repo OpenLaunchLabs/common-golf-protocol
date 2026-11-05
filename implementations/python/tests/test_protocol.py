@@ -4,7 +4,7 @@ import struct
 import pytest
 
 from common_golf import (Draft, ProtocolError, StreamDecoder, frame,
-                         apply_patch, Snapshots, Identity, tier_of)
+                         apply_patch, Snapshots, Identity)
 
 SHOT = {"type": "shot", "shot_number": 1, "ball_speed_meters_per_second": 50,
         "vertical_launch_angle_degrees": 12, "horizontal_launch_angle_degrees": 0}
@@ -110,7 +110,7 @@ def test_patch_and_snapshot_replace():
     assert "player" not in store.state[6]
 
 
-def test_identity_persistence_and_tiers(tmp_path):
+def test_identity_persistence(tmp_path):
     identity = Identity(tmp_path)
     assert len(identity.fingerprint) == 64
     assert Identity(tmp_path, "another name").fingerprint == identity.fingerprint
@@ -119,5 +119,3 @@ def test_identity_persistence_and_tiers(tmp_path):
         config = identity.configuration(is_client=True, draft=draft)
         assert config.idle_timeout == 90
         assert config.alpn_protocols == [Draft(draft).alpn]
-    assert tier_of(None, {None: "internal"}) == "maker"
-    assert tier_of(identity.fingerprint, {identity.fingerprint: "developer"}) == "developer"

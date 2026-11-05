@@ -4,19 +4,22 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub const SERVICE: &str = "_common-golf._udp.local.";
 pub const MAX_MESSAGE: usize = 65_535;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Draft {
     One,
     Two,
+    #[default]
+    Three,
 }
 
 impl Draft {
-    pub const SUPPORTED: [Self; 2] = [Self::Two, Self::One];
+    pub const SUPPORTED: [Self; 3] = [Self::Three, Self::Two, Self::One];
 
     pub fn alpn(self) -> &'static [u8] {
         match self {
             Self::One => b"common-golf/draft-1",
             Self::Two => b"common-golf/draft-2",
+            Self::Three => b"common-golf/draft-3",
         }
     }
 
@@ -24,6 +27,7 @@ impl Draft {
         match self {
             Self::One => "0.1.1",
             Self::Two => "0.2.0",
+            Self::Three => "0.3.0",
         }
     }
 
@@ -36,7 +40,7 @@ impl Draft {
     pub(crate) fn excluded_metadata(self, channel: u32) -> Option<&'static str> {
         match (self, channel) {
             (Self::One, 1 | 3) => Some("estimated"),
-            (Self::Two, 1) => Some("reduced_accuracy"),
+            (Self::Two | Self::Three, 1) => Some("reduced_accuracy"),
             _ => None,
         }
     }
@@ -59,11 +63,14 @@ pub enum Message {
     State(State),
     Result(ShotResult),
     Flight(Flight),
+    #[serde(untagged)]
+    Draft3(crate::draft3::Message),
 }
 
 impl Message {
     pub fn channel(&self) -> u32 {
         match self {
+            Self::Draft3(m) => m.channel(),
             Self::Info(_) => 0,
             Self::Shot(_) => 1,
             Self::Club(_) => 3,
@@ -76,6 +83,10 @@ impl Message {
     }
 
     pub fn decode(channel: u32, bytes: &[u8]) -> Result<Self, String> {
+        Self::decode_for(Draft::default(), channel, bytes)
+    }
+
+    fn decode_legacy(channel: u32, bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_MESSAGE {
             return Err("Common Golf message exceeds its limit".into());
         }
@@ -101,22 +112,35 @@ impl Message {
     }
 
     pub fn decode_for(draft: Draft, channel: u32, bytes: &[u8]) -> Result<Self, String> {
+        if draft == Draft::Three {
+            return crate::draft3::Message::decode(channel, bytes)
+                .map(Self::Draft3)
+                .map_err(|e| e.to_string());
+        }
         if bytes.len() > MAX_MESSAGE {
             return Err("Common Golf message exceeds its limit".into());
         }
         let Some(excluded) = draft.excluded_metadata(channel) else {
-            return Self::decode(channel, bytes);
+            return Self::decode_legacy(channel, bytes);
         };
         let mut fields: std::collections::BTreeMap<String, &serde_json::value::RawValue> =
             serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         fields.remove(excluded);
-        Self::decode(
+        Self::decode_legacy(
             channel,
             &serde_json::to_vec(&fields).map_err(|e| e.to_string())?,
         )
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, String> {
+        self.encode_for(Draft::default())
+    }
+
+    fn encode_validated(&self) -> Result<Vec<u8>, String> {
+        if let Self::Draft3(message) = self {
+            crate::draft3::validate(message.channel(), &message.0).map_err(|e| e.to_string())?;
+        }
+
         // serde_json otherwise silently serializes non-finite floats as null.
         if contains_nonfinite(self) {
             return Err("Common Golf measurement is not finite".into());
@@ -129,6 +153,17 @@ impl Message {
     }
 
     pub fn encode_for(&self, draft: Draft) -> Result<Vec<u8>, String> {
+        if let Self::Draft3(message) = self {
+            if draft != Draft::Three {
+                return Err("draft 3 snapshots cannot be encoded as legacy messages".into());
+            }
+            crate::draft3::validate(message.channel(), &message.0).map_err(|e| e.to_string())?;
+            return self.encode_validated();
+        }
+        if draft == Draft::Three {
+            return Err("use draft3::Message with a source-generated shot_uuid".into());
+        }
+
         let mut message = self.clone();
         match (&mut message, draft) {
             (Self::Shot(shot), Draft::One) => shot.estimated = None,
@@ -136,7 +171,7 @@ impl Message {
             (Self::Club(club), Draft::One) => club.estimated = None,
             _ => {}
         }
-        message.encode()
+        message.encode_validated()
     }
 }
 
@@ -772,8 +807,8 @@ mod tests {
             "reduced_accuracy": true, "estimated": ["ball_speed_meters_per_second"]
         });
         let bytes = serde_json::to_vec(&payload).unwrap();
-        let canonical = Message::decode(1, &bytes).unwrap();
-        for draft in Draft::SUPPORTED {
+        let canonical = Message::Shot(serde_json::from_value(payload.clone()).unwrap());
+        for draft in [Draft::One, Draft::Two] {
             let Message::Shot(decoded) = Message::decode_for(draft, 1, &bytes).unwrap() else {
                 panic!();
             };
@@ -833,7 +868,7 @@ mod tests {
     #[test]
     fn draft_filtering_preserves_full_timestamp_precision() {
         let bytes = br#"{"type":"shot","shot_number":1,"ball_speed_meters_per_second":40,"vertical_launch_angle_degrees":10,"horizontal_launch_angle_degrees":0,"measured_at_nanoseconds":18446744073709551617}"#;
-        for draft in Draft::SUPPORTED {
+        for draft in [Draft::One, Draft::Two] {
             let message = Message::decode_for(draft, 1, bytes).unwrap();
             let round_trip =
                 Message::decode_for(draft, 1, &message.encode_for(draft).unwrap()).unwrap();
@@ -850,17 +885,38 @@ mod tests {
     #[test]
     fn typed_messages_use_decoding_errors_without_semantic_validation() {
         let bytes = br#"{"type":"shot","shot_number":0,"ball_speed_meters_per_second":-1,"vertical_launch_angle_degrees":100,"horizontal_launch_angle_degrees":0,"estimated":["missing"],"future":true}"#;
-        let message = Message::decode(1, bytes).unwrap();
-        let encoded = message.encode().unwrap();
+        let message = Message::decode_for(Draft::Two, 1, bytes).unwrap();
+        let encoded = message.encode_for(Draft::Two).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["ball_speed_meters_per_second"], -1.0);
         assert_eq!(value["vertical_launch_angle_degrees"], 100.0);
         assert!(value.get("future").is_none());
-        assert!(Message::decode(1, br#"{"type":"shot"}"#).is_err());
-        assert!(Message::decode(1, br#"{"type":"shot","shot_number":"one"}"#).is_err());
+        assert!(Message::decode_for(Draft::Two, 1, br#"{"type":"shot"}"#).is_err());
+        assert!(
+            Message::decode_for(Draft::Two, 1, br#"{"type":"shot","shot_number":"one"}"#).is_err()
+        );
         if let Message::Shot(mut shot) = message {
             shot.ball_speed_meters_per_second = f64::INFINITY;
-            assert!(Message::Shot(shot).encode().is_err());
+            assert!(Message::Shot(shot).encode_for(Draft::Two).is_err());
         }
+    }
+
+    #[test]
+    fn unqualified_message_api_defaults_to_draft_three() {
+        assert_eq!(Draft::default(), Draft::Three);
+        let snapshot = json!({"type":"shot","shot_uuid":"017f22e2-79b0-7cc3-98c4-dc0c0c07398f",
+            "ball_speed_meters_per_second":40,"vertical_launch_angle_degrees":10,
+            "horizontal_launch_angle_degrees":0,"future":true});
+        let message = Message::decode(1, &serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(matches!(message, Message::Draft3(_)));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&message.encode().unwrap()).unwrap(),
+            snapshot
+        );
+        let legacy = br#"{"type":"shot","shot_number":1,"ball_speed_meters_per_second":40,"vertical_launch_angle_degrees":10,"horizontal_launch_angle_degrees":0}"#;
+        assert!(Message::decode(1, legacy).is_err());
+        let old = Message::decode_for(Draft::Two, 1, legacy).unwrap();
+        assert!(old.encode().is_err());
+        assert!(old.encode_for(Draft::Two).is_ok());
     }
 }

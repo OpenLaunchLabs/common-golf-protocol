@@ -11,6 +11,7 @@ from zeroconf import IPVersion, ServiceInfo, ServiceListener
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 from .protocol import Draft, SERVICE
+from .identity import validate_key
 
 
 @dataclass(frozen=True)
@@ -31,14 +32,18 @@ def local_ip():
 
 
 @asynccontextmanager
-async def listen(name, identity, create_protocol, *, draft=Draft.TWO, properties=None):
+async def listen(name, identity, create_protocol, *, draft=Draft.THREE, properties=None):
     """Bind an ephemeral port, advertise it, serve independent connections."""
     server = await serve("0.0.0.0", 0, configuration=identity.configuration(is_client=False, draft=draft),
                          create_protocol=create_protocol)
     port = server._transport.get_extra_info("sockname")[1]
     zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+    properties = dict(properties or {})
+    if Draft(draft) == Draft.THREE:
+        properties["key"] = identity.fingerprint
+        properties.setdefault("alpn", "draft-3")
     info = ServiceInfo(SERVICE, f"{name}.{SERVICE}", addresses=[socket.inet_aton(local_ip())],
-                       port=port, properties=properties or {}, server=f"cgp-{identity.fingerprint[:12]}.local.")
+                       port=port, properties=properties, server=f"cgp-{identity.fingerprint[:12]}.local.")
     registered = False
     try:
         await zc.async_register_service(info)
@@ -52,7 +57,7 @@ async def listen(name, identity, create_protocol, *, draft=Draft.TWO, properties
 
 
 async def discover(seconds=3.0):
-    """Browse discovered listeners. Applications choose a name, never an IP field."""
+    """Browse discovered servers. Applications choose a name, never an IP field."""
     found = {}
     tasks = set()
     zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
@@ -64,7 +69,7 @@ async def discover(seconds=3.0):
                 found[name] = DiscoveredPeer(name.removesuffix("." + SERVICE), addresses[0], info.port,
                     {k.decode("utf-8", "replace"): (v or b"").decode("utf-8", "replace")
                      for k, v in info.properties.items()})
-    class Listener(ServiceListener):
+    class DiscoveryEvents(ServiceListener):
         def add_service(self, z, type_, name):
             task = asyncio.create_task(resolve(name))
             tasks.add(task)
@@ -73,7 +78,7 @@ async def discover(seconds=3.0):
             self.add_service(z, type_, name)
         def remove_service(self, z, type_, name):
             found.pop(name, None)
-    browser = AsyncServiceBrowser(zc.zeroconf, SERVICE, listener=Listener())
+    browser = AsyncServiceBrowser(zc.zeroconf, SERVICE, listener=DiscoveryEvents())
     try:
         await asyncio.sleep(seconds)
     finally:
@@ -85,7 +90,8 @@ async def discover(seconds=3.0):
     return list(found.values())
 
 
-def dial(peer, identity, create_protocol, *, draft=Draft.TWO):
-    """Connect to a DiscoveredPeer; use one context per independent listener."""
-    return connect(peer.host, peer.port, configuration=identity.configuration(is_client=True, draft=draft),
+def dial(peer, identity, create_protocol, *, draft=Draft.THREE):
+    """Connect to a DiscoveredPeer; use one context per independent server."""
+    expected_key = validate_key(peer.properties.get("key")) if Draft(draft) == Draft.THREE else None
+    return connect(peer.host, peer.port, configuration=identity.configuration(is_client=True, draft=draft, expected_key=expected_key),
                    create_protocol=create_protocol)

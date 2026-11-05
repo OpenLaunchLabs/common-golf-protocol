@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise stream isolation and boundary cases against every real QUIC listener.
+"""Exercise stream isolation and boundary cases against every real QUIC server.
 
 The Python package is the test driver; each target is a separate process using
 its own transport implementation. No target source is imported or mocked.
@@ -18,6 +18,7 @@ import time
 
 from aioquic.asyncio import connect
 from common_golf import Connection, Draft, Identity, frame
+from common_golf.contracts import Contract, OPEN_CONNECT
 
 from run import ROOT, stop
 
@@ -31,7 +32,7 @@ EXPECTED = {
 
 
 def records(path):
-    # The listener may be halfway through a 65 KiB log write. Only newline-
+    # The server may be halfway through a 65 KiB log write. Only newline-
     # terminated records are committed; never parse its in-progress final line.
     if not path.exists():
         return []
@@ -40,14 +41,19 @@ def records(path):
 
 class Probe(Connection):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, role='sim', private_channels={1000: 65535}, **kwargs)
+        if int(kwargs.get('draft', 3)) == 3:
+            contracts = [Contract('io.common-golf.interop-json-v1'), OPEN_CONNECT]
+            options = {'contracts': {contract.identifier: contract for contract in contracts}}
+        else:
+            options = {'private_channels': {1000: 65535}}
+        super().__init__(*args, role='sim', **options, **kwargs)
         self.received = []
         self.stops = {}
         self.terminated = None
 
     def on_message(self, channel, message, stream_id):
         self.received.append((channel, message))
-        if channel == 2 and 'Code' not in message:
+        if channel in (2, 1003) and 'Code' not in message:
             # Reply on the same bidirectional stream: send() adds a length only.
             self.send(stream_id, {'Code': 200, 'Message': 'adversarial reply'})
 
@@ -78,29 +84,32 @@ def marked(path, marker):
     return [r for r in records(path) if r.get('message', {}).get('probe') == marker]
 
 
-async def exercise(port, draft, directory, listener_output):
+async def exercise(port, draft, directory, server_output, expected_key=None):
     checks = set()
     factory = partial(Probe, draft=draft)
+    open_connect = 1003 if draft == 3 else 2
+    state_type = 'simulator_state' if draft == 3 else 'state'
+    shot_identity = {'shot_uuid': '019a0000-0000-7000-8000-000000000001'} if draft == 3 else {'shot_number': 1}
     first_id = Identity(directory / 'probe-first')
     second_id = Identity(directory / 'probe-second')
     async with AsyncExitStack() as stack:
         first = await stack.enter_async_context(connect(
-            '127.0.0.1', port, configuration=first_id.configuration(is_client=True, draft=draft),
+            '127.0.0.1', port, configuration=first_id.configuration(is_client=True, draft=draft, expected_key=expected_key if draft == 3 else None),
             create_protocol=factory))
-        await until(lambda: {0, 1, 2, 3, 4, 5, 8, 1000} <= {ch for ch, _ in first.received},
-                    'listener baseline channels')
+        await until(lambda: {0, 1, open_connect, 3, 4, 5, 8, 1000} <= {ch for ch, _ in first.received},
+                    'server baseline channels')
         checks.add('baseline_channels')
-        await until(lambda: any(r.get('channel') == 2 and r.get('message', {}).get('Message') == 'adversarial reply'
-                               for r in records(listener_output)), 'Open Connect reply decoded by listener')
+        await until(lambda: any(r.get('channel') == open_connect and r.get('message', {}).get('Message') == 'adversarial reply'
+                               for r in records(server_output)), 'Open Connect reply decoded by server')
         checks.add('open_connect_reply_without_prefix')
 
         # Keep one valid simulator-owned channel open for duplicate and survival checks.
-        state_sid = first.publish(6, {'type': 'state', 'ready': True, 'probe': 'initial-state'})
-        await until(lambda: marked(listener_output, 'initial-state'), 'initial state')
+        state_sid = first.publish(6, {'type': state_type, 'ready': True, 'probe': 'initial-state'})
+        await until(lambda: marked(server_output, 'initial-state'), 'initial state')
         for label, channel, body, expected in [
             ('reserved_stop_1', 999, frame({}), 1),
             ('wrong_owner_stop_1', 1, frame({'type': 'shot'}), 1),
-            ('duplicate_stop_1', 6, frame({'type': 'state'}), 1),
+            ('duplicate_stop_1', 6, frame({'type': state_type}), 1),
             ('oversize_stop_2', 7, struct.pack('>I', 65536), 2),
             ('zero_stop_2', 7, struct.pack('>I', 0), 2),
             ('nonobject_stop_2', 7, struct.pack('>I', 2) + b'[]', 2),
@@ -118,18 +127,18 @@ async def exercise(port, draft, directory, listener_output):
         # the same channel demonstrates that the reservation was released.
         truncated_sid = first.inject(7, struct.pack('>I', 3) + b'{}', fin=True)
         await asyncio.sleep(.1)
-        assert not any(r.get('channel') == 7 and 'message' in r for r in records(listener_output)), \
-            'Malformed result frames reached the listener application'
-        result_sid = first.publish(7, {'type': 'result', 'shot_number': 1, 'accepted': True,
+        assert not any(r.get('channel') == 7 and 'message' in r for r in records(server_output)), \
+            'Malformed result frames reached the server application'
+        result_sid = first.publish(7, {'type': 'result', **shot_identity, 'accepted': True,
                                        'probe': 'after-truncated-fin'})
-        await until(lambda: marked(listener_output, 'after-truncated-fin'), 'reopen after truncated FIN')
+        await until(lambda: marked(server_output, 'after-truncated-fin'), 'reopen after truncated FIN')
         assert result_sid != truncated_sid
         assert result_sid not in first.stops
         checks.add('truncated_fin_discard_and_reopen')
 
         # Exactly 65535 UTF-8 bytes, with an unknown extension field. Write the
         # frame header in separate sends, then let QUIC fragment the large body.
-        maximum = {'type': 'state', 'ready': True, 'probe': 'maximum-state', 'padding': ''}
+        maximum = {'type': state_type, 'ready': True, 'probe': 'maximum-state', 'padding': ''}
         maximum['padding'] = 'x' * (65535 - (len(frame(maximum)) - 4))
         encoded = frame(maximum)
         assert len(encoded) == 65539
@@ -137,8 +146,8 @@ async def exercise(port, draft, directory, listener_output):
             first._quic.send_stream_data(state_sid, part)
             first.transmit()
             await asyncio.sleep(.01)
-        await until(lambda: marked(listener_output, 'maximum-state'), '65535-byte state object')
-        got = marked(listener_output, 'maximum-state')[-1]['message']
+        await until(lambda: marked(server_output, 'maximum-state'), '65535-byte state object')
+        got = marked(server_output, 'maximum-state')[-1]['message']
         assert got == maximum, 'Maximum-size message changed or lost its unknown field'
         assert state_sid not in first.stops
         checks.add('maximum_65535_and_fragmented_header')
@@ -146,12 +155,12 @@ async def exercise(port, draft, directory, listener_output):
         # A second connection can use the same channel number while the first
         # continues publishing. It has a distinct certificate and state machine.
         second = await stack.enter_async_context(connect(
-            '127.0.0.1', port, configuration=second_id.configuration(is_client=True, draft=draft),
+            '127.0.0.1', port, configuration=second_id.configuration(is_client=True, draft=draft, expected_key=expected_key if draft == 3 else None),
             create_protocol=factory))
-        await until(lambda: {0, 1, 2} <= {ch for ch, _ in second.received}, 'second connection baseline')
-        second.publish(6, {'type': 'state', 'ready': False, 'probe': 'second-client'})
-        first.send(state_sid, {'type': 'state', 'ready': True, 'probe': 'first-client-still-active'})
-        await until(lambda: marked(listener_output, 'second-client') and marked(listener_output, 'first-client-still-active'),
+        await until(lambda: {0, 1, open_connect} <= {ch for ch, _ in second.received}, 'second connection baseline')
+        second.publish(6, {'type': state_type, 'ready': False, 'probe': 'second-client'})
+        first.send(state_sid, {'type': state_type, 'ready': True, 'probe': 'first-client-still-active'})
+        await until(lambda: marked(server_output, 'second-client') and marked(server_output, 'first-client-still-active'),
                     'independent simultaneous state streams')
         assert not second.stops, second.stops
         assert first.peer_fingerprint and first.peer_fingerprint == second.peer_fingerprint
@@ -167,29 +176,33 @@ async def case(command, language, draft):
     label = f'{language} draft-{draft}'
     with tempfile.TemporaryDirectory(prefix='cgp-adversarial-') as temporary:
         directory = Path(temporary)
-        output = directory / 'listener.jsonl'
+        output = directory / 'server.jsonl'
         args = command + ['--role', 'listen', '--host', '127.0.0.1', '--port', '0', '--draft', str(draft),
                           '--version', Draft(draft).version, '--duration', '45', '--output', str(output),
-                          '--identity', str(directory / 'listener-identity')]
+                          '--identity', str(directory / 'server-identity')]
         process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
                                                       stderr=asyncio.subprocess.STDOUT)
         logs, drain = [], None
+        server_key = None
         async def ready():
+            nonlocal server_key
             while line := await process.stdout.readline():
                 text = line.decode(errors='replace').strip()
                 logs.append(text)
+                if text.startswith('KEY '):
+                    server_key = text.split()[1]
                 if text.startswith('READY '):
                     return int(text.split()[1])
-            raise AssertionError('Listener exited before READY: ' + '\n'.join(logs))
+            raise AssertionError('Server exited before READY: ' + '\n'.join(logs))
         try:
             port = await asyncio.wait_for(ready(), 15)
             drain = asyncio.create_task(process.stdout.read())
-            checks = await asyncio.wait_for(exercise(port, draft, directory, output), 35)
-            assert process.returncode is None, f'Listener exited unexpectedly: {process.returncode}'
+            checks = await asyncio.wait_for(exercise(port, draft, directory, output, server_key), 35)
+            assert process.returncode is None, f'Server exited unexpectedly: {process.returncode}'
             return {'case': label, 'result': 'passed', 'checks': checks}
         except Exception as error:
             return {'case': label, 'result': 'failed', 'error': f'{type(error).__name__}: {error}',
-                    'listener_log': logs}
+                    'server_log': logs}
         finally:
             await stop(process)
             if drain:
@@ -202,7 +215,7 @@ async def main(args):
     selected = args.languages.split(',')
     assert selected and all(name in commands for name in selected), 'Unknown or empty language selection'
     drafts = [int(value) for value in args.drafts.split(',')]
-    assert drafts and all(draft in (1, 2) for draft in drafts), 'Unknown or empty draft selection'
+    assert drafts and all(draft in (1, 2, 3) for draft in drafts), 'Unknown or empty draft selection'
     assert args.jobs > 0, '--jobs must be positive'
     semaphore = asyncio.Semaphore(args.jobs)
     async def run(language, draft):
@@ -229,7 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--rust', default=str(ROOT / 'implementations/rust/target/debug/cgp-peer'))
     parser.add_argument('--c', default=str(ROOT / 'implementations/c/build/cgp-peer'))
     parser.add_argument('--languages', default='python,rust,c')
-    parser.add_argument('--drafts', default='1,2')
+    parser.add_argument('--drafts', default='1,2,3')
     parser.add_argument('--jobs', type=int, default=3)
     parser.add_argument('--report', default=str(ROOT / 'test-results/adversarial.json'))
     sys.exit(asyncio.run(main(parser.parse_args())))

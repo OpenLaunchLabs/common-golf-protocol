@@ -1,8 +1,14 @@
 # Python examples
 
-The scripts in `examples/` use the
-[Python package](../../implementations/python/README.md). From the repository
-root:
+The scripts in `examples/` demonstrate launch monitors, a swing-speed radar,
+a control box, and a simulator using the
+[Python package](../../implementations/python/README.md). All measurements
+and button presses are synthetic.
+
+## Run
+
+Install the package from the repository root, then run the simulator and a
+device in separate terminals:
 
 ```sh
 python3 -m venv .venv
@@ -11,17 +17,34 @@ python3 -m venv .venv
 .venv/bin/python examples/launch_monitor_minimum.py # terminal 2
 ```
 
-The simulator finds devices with DNS-SD. Everything uses draft 2 by default;
-pass `--draft 1` to both ends for draft 1.
+The simulator discovers devices through DNS-SD. All scripts default to
+draft 3. To use draft 1 or 2, pass `--draft 1` or `--draft 2` to both the
+simulator and the device.
+
+## Scripts
 
 | Script | Behavior |
 |---|---|
-| `launch_monitor_minimum.py` | Three-number shots. |
-| `launch_monitor_full.py` | Status and preliminary/final shots; trusted simulators also get club and flight data. |
-| `launch_monitor_open_connect.py` | Open Connect v1 JSON on channel 2. |
+| `launch_monitor_minimum.py` | Shots containing ball speed, launch angle, and launch direction. |
+| `launch_monitor_full.py` | Device status, updated shot snapshots, club data, and computed flight. |
+| `launch_monitor_open_connect.py` | Open Connect JSON on custom channel 1003, or channel 2 in drafts 1 and 2. |
 | `swing_speed_radar.py` | Club speed without ball data. |
 | `control_box.py` | Synthetic button presses. |
-| `sim.py` | Publishes state, returns shot results, and answers Open Connect. |
+| `sim.py` | Publishes simulator state, returns shot results, and responds to Open Connect requests. |
 
-Measurements are synthetic. Run a script with `--help` for its options,
-including identity, trust list, and duration.
+Run any script with `--help` for its identity and duration options.
+
+The full launch monitor sends club and flight data to peers in its
+`internal` or `developer` groups; every peer receives shots and status.
+To configure these groups, print the simulator's fingerprint:
+
+```sh
+.venv/bin/python -c 'from common_golf import Identity; print(Identity(".cgp-identities/example-sim", "example-sim").fingerprint)'
+```
+
+Copy `examples/fingerprints.example.json` to `my-fingerprints.json`, add an
+entry keyed by the fingerprint with `"group": "developer"`, and start the device:
+
+```sh
+.venv/bin/python examples/launch_monitor_full.py --peer-groups my-fingerprints.json
+```

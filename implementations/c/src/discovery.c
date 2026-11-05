@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "cgp_discovery.h"
+#include "cgp.h"
 #include <dns_sd.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -9,16 +10,21 @@
 #include <netdb.h>
 
 typedef struct resolve_request { struct resolve_request *next; struct cgp_discovery *owner; DNSServiceRef ref; char name[256]; bool complete; } resolve_request;
-struct cgp_discovery { DNSServiceRef browse,registration; resolve_request *requests; cgp_discovered callback; void *user; };
+struct cgp_discovery { DNSServiceRef browse,registration; resolve_request *requests; cgp_discovered callback; cgp_discovered_key key_callback; void *user; };
 static void resolved(DNSServiceRef ref,DNSServiceFlags flags,uint32_t interface,DNSServiceErrorType error,const char *fullname,const char *host,uint16_t port,uint16_t txtlen,const unsigned char *txt,void *user) {
     (void)ref;(void)flags;(void)interface;(void)fullname;(void)txtlen;(void)txt;
     resolve_request *r=user; r->complete=true;
-    if (error || !r->owner->callback) return;
+    if (error || (!r->owner->callback && !r->owner->key_callback)) return;
+    char key[65]={0};uint8_t key_length=0;
+    const void *key_bytes=TXTRecordGetValuePtr(txtlen,txt,"key",&key_length);
+    if(key_bytes && key_length==64)memcpy(key,key_bytes,64);
+    if(r->owner->key_callback && !cgp_key_valid(key))return;
     struct addrinfo hint={.ai_family=AF_INET,.ai_socktype=SOCK_DGRAM},*addresses=NULL;
     if (getaddrinfo(host,NULL,&hint,&addresses)) return;
     for (struct addrinfo *a=addresses;a;a=a->ai_next) {
         struct sockaddr_in address=*(struct sockaddr_in *)a->ai_addr; address.sin_port=port;
-        r->owner->callback(r->name,&address,r->owner->user);
+        if(r->owner->key_callback)r->owner->key_callback(r->name,&address,key,r->owner->user);
+        else r->owner->callback(r->name,&address,r->owner->user);
     }
     freeaddrinfo(addresses);
 }
@@ -37,6 +43,22 @@ cgp_discovery *cgp_discovery_start(const char *name,uint16_t port,cgp_discovered
     if (callback && DNSServiceBrowse(&d->browse,0,0,"_common-golf._udp",NULL,browsed,d)) goto fail;
     return d;
 fail: cgp_discovery_stop(d); return NULL;
+}
+cgp_discovery *cgp_discovery_start_key(const char *name,uint16_t port,const char *key,const char *alpn,const char *caps,cgp_discovered_key callback,void *user) {
+    if((name && port && !cgp_key_valid(key)) || (alpn && strlen(alpn)>255) || (caps && strlen(caps)>255))return NULL;
+    cgp_discovery *d=calloc(1,sizeof(*d));if(!d)return NULL;
+    d->key_callback=callback;d->user=user;
+    TXTRecordRef txt;TXTRecordCreate(&txt,0,NULL);
+    if(name && port) {
+        if(TXTRecordSetValue(&txt,"key",64,key))goto fail;
+        if(alpn && TXTRecordSetValue(&txt,"alpn",(uint8_t)strlen(alpn),alpn))goto fail;
+        if(caps && TXTRecordSetValue(&txt,"caps",(uint8_t)strlen(caps),caps))goto fail;
+        if(DNSServiceRegister(&d->registration,0,0,name,"_common-golf._udp",NULL,NULL,htons(port),TXTRecordGetLength(&txt),TXTRecordGetBytesPtr(&txt),NULL,NULL))goto fail;
+    }
+    TXTRecordDeallocate(&txt);
+    if(callback && DNSServiceBrowse(&d->browse,0,0,"_common-golf._udp",NULL,browsed,d)){cgp_discovery_stop(d);return NULL;}
+    return d;
+fail: TXTRecordDeallocate(&txt);cgp_discovery_stop(d);return NULL;
 }
 static void process(DNSServiceRef ref) {
     if (!ref) return;
