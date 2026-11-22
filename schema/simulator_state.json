@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Golf Protocol channel 6: simulator_state (simulator context, sent on open and on change)",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {"const": "simulator_state"},
+    "ready": {"type": ["boolean", "null"]},
+    "player": {
+      "type": ["object", "null"],
+      "properties": {
+        "name": {"type": "string"},
+        "dexterity": {"enum": ["right", "left"]}
+      }
+    },
+    "distance_to_target_meters": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Distance from the ball to the current target in meters; null clears the distance."
+    },
+    "requested_capture_mode": {"enum": ["full", "short", "putting", null]}
+  }
+}

@@ -2,10 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Common Golf Protocol channel 8: flight (device's computed ball flight)",
   "type": "object",
-  "required": ["type", "shot_number"],
+  "required": ["type", "shot_uuid"],
   "properties": {
     "type": {"const": "flight"},
-    "shot_number": {"type": "integer", "minimum": 1},
+    "shot_uuid": {
+      "type": "string",
+      "format": "uuid",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 in lowercase hyphenated form. Copy the source shot's shot_uuid to correlate its flight; independent of measured_at."
+    },
     "carry_distance_meters": {"type": "number", "minimum": 0},
     "carry_side_meters": {"type": "number"},
     "total_distance_meters": {"type": "number", "minimum": 0},
@@ -13,7 +20,6 @@
     "max_height_meters": {"type": "number", "minimum": 0},
     "curve_meters": {"type": "number"},
     "landing_angle_degrees": {"type": "number", "minimum": 0, "maximum": 90},
-    "hang_time_seconds": {"type": "number", "minimum": 0},
-    "final": {"type": "boolean"}
+    "hang_time_seconds": {"type": "number", "minimum": 0}
   }
 }
