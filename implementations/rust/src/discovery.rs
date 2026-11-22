@@ -1,4 +1,4 @@
-//! DNS-SD registration and browsing. Hold the registration for the listener's lifetime.
+//! DNS-SD registration and browsing. Hold the registration for the server's lifetime.
 use anyhow::Result;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
@@ -37,7 +37,7 @@ pub struct Discovered {
     pub addresses: Vec<SocketAddr>,
     pub properties: HashMap<String, String>,
 }
-/// Collect resolved listeners for a bounded interval. Applications can browse repeatedly.
+/// Collect resolved servers for a bounded interval. Applications can browse repeatedly.
 pub async fn browse(duration: Duration) -> Result<Vec<Discovered>> {
     let daemon = ServiceDaemon::new()?;
     daemon.enable_interface(mdns_sd::IfKind::LoopbackV4)?;

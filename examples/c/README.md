@@ -1,9 +1,12 @@
 # C example
 
-`cgp-demo` runs a draft 2 device or simulator on the
-[C library](../../implementations/c/README.md). The device advertises itself
-and sends one synthetic shot after info. The simulator discovers it and sends
-state. Both print what they receive.
+`cgp-demo` uses the [C library](../../implementations/c/README.md) to run a
+draft 3 launch monitor or simulator. The launch monitor advertises itself
+through DNS-SD and sends one synthetic shot after exchanging `info` messages.
+The simulator discovers the device, verifies its advertised key during the
+handshake, and sends simulator state. Both roles log received messages.
+
+## Build
 
 Build from the repository root:
 
@@ -13,16 +16,17 @@ cmake -S implementations/c -B implementations/c/build
 cmake --build implementations/c/build --parallel
 ```
 
-Discovery needs Bonjour or the Avahi development headers at build time;
-without them `cgp-demo` builds but exits with an error.
+Install Bonjour or the Avahi development headers before building. Without
+discovery support, `cgp-demo` builds but cannot run.
 
-Run each in its own terminal:
+## Run
+
+Run the launch monitor and simulator in separate terminals:
 
 ```sh
 implementations/c/build/cgp-demo --role device --name "C example" --identity .cgp-identities/c-device
 implementations/c/build/cgp-demo --role simulator --discover "C example" --identity .cgp-identities/c-simulator
 ```
 
-`demo_app.c` has the message callbacks; `main.c` handles identity, discovery,
-and polling. Peer fingerprints are logged after the handshake, and every peer
-is treated as `maker`.
+Message callbacks are in `demo_app.c`; identity, discovery, and polling are
+in `main.c`. The example logs peer fingerprints after the handshake.

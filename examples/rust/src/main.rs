@@ -1,12 +1,8 @@
-//! Discovery-first draft 2 launch monitor and simulator using the Rust library.
+//! Discovery-first draft 3 launch monitor and simulator using the Rust library.
 use anyhow::{bail, Context, Result};
 use common_golf_protocol::{endpoint, identity::Identity, Draft, Peer, Role};
 use serde_json::json;
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    time::Duration,
-};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,9 +26,9 @@ async fn main() -> Result<()> {
     let deadline = tokio::time::Instant::now() + duration;
     match role {
         "listen" => {
-            let listener = endpoint::Listener::bind(
+            let server = endpoint::Server::bind(
                 &identity,
-                &[Draft::Two],
+                &[Draft::Three],
                 name,
                 &format!("cgp-rust-demo-{}.local.", std::process::id()),
                 HashMap::from([("role".into(), "launch_monitor".into())]),
@@ -42,10 +38,10 @@ async fn main() -> Result<()> {
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep_until(deadline) => break,
-                    incoming = listener.endpoint.accept() => {
+                    incoming = server.endpoint.accept() => {
                         let Some(incoming) = incoming else { break; };
                         let name = name.to_owned();
-                        sessions.spawn(async move { exchange(incoming.await?, Role::Device, &name, deadline).await });
+                        sessions.spawn(async move { exchange(incoming.await?, Role::Device, &name, deadline, None).await });
                     }
                     done = sessions.join_next(), if !sessions.is_empty() => {
                         if let Some(done) = done {
@@ -55,8 +51,8 @@ async fn main() -> Result<()> {
                 }
             }
             sessions.shutdown().await;
-            listener.endpoint.close(0u32.into(), b"demo complete");
-            listener.endpoint.wait_idle().await;
+            server.endpoint.close(0u32.into(), b"demo complete");
+            server.endpoint.wait_idle().await;
         }
         "connect" => {
             let devices = common_golf_protocol::discovery::browse(Duration::from_secs(2)).await?;
@@ -65,16 +61,17 @@ async fn main() -> Result<()> {
                 .iter()
                 .find(|d| d.name == name || d.name == fullname)
                 .context("named launch monitor was not discovered")?;
-            // The demo listener binds IPv4; try those discovered addresses first.
+            // The demo server binds IPv4; try those discovered addresses first.
             let mut device = device.clone();
             device.addresses.sort_by_key(|address| address.is_ipv6());
-            let connected = endpoint::connect(&identity, &[Draft::Two], &device).await?;
+            let connected = endpoint::connect(&identity, &[Draft::Three], &device).await?;
             let deadline = tokio::time::Instant::now() + duration;
             exchange(
                 connected.connection.clone(),
                 Role::Simulator,
                 "Rust simulator",
                 deadline,
+                device.properties.get("key").map(String::as_str),
             )
             .await?;
             connected.endpoint.close(0u32.into(), b"demo complete");
@@ -89,32 +86,33 @@ async fn exchange(
     role: Role,
     name: &str,
     deadline: tokio::time::Instant,
+    expected_key: Option<&str>,
 ) -> Result<()> {
     let device = role == Role::Device;
-    let mut peer = Peer::new(connection, role,
-        json!({"type":"info","protocol_version":"0.2.0","name":name,"channels":if device {vec![0,1,4]} else {vec![0,6,7]}}), HashSet::new()).await?;
+    let mut peer = Peer::with_contracts(connection, role,
+        json!({"type":"info","protocol_version":"0.3.0","name":name,"channels":if device {vec![0,1,4]} else {vec![0,6,7]}}), Vec::new(), expected_key).await?;
     println!("connected: {:?}", peer.fingerprint);
     if device {
-        peer.send(4, &json!({"type":"status","ready":true})).await?;
+        peer.send(4, &json!({"type":"device_status","ready":true}))
+            .await?;
     } else {
-        peer.send(6, &json!({"type":"state","ready":true,"mode":"range"}))
+        peer.send(6, &json!({"type":"simulator_state","ready":true}))
             .await?;
     }
     let mut shots = tokio::time::interval(Duration::from_secs(2));
-    let mut shot_number = 0u32;
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => break,
             _ = peer.connection.closed() => break,
             _ = shots.tick(), if device => {
-                shot_number += 1;
-                peer.send(1, &json!({"type":"shot","shot_number":shot_number,"ball_speed_meters_per_second":60,"vertical_launch_angle_degrees":12,"horizontal_launch_angle_degrees":0,"final":true})).await?;
+                let shot_uuid=common_golf_protocol::draft3::new_shot_uuid()?;
+                peer.send(1, &json!({"type":"shot","shot_uuid":shot_uuid,"ball_speed_meters_per_second":60,"vertical_launch_angle_degrees":12,"horizontal_launch_angle_degrees":0})).await?;
             }
             event = peer.incoming.recv() => {
                 let Some(event) = event else { break; };
                 println!("channel {}: {}", event.channel, event.message);
                 if !device && event.channel == 1 {
-                    peer.send(7, &json!({"type":"result","shot_number":event.message["shot_number"],"accepted":true})).await?;
+                    peer.send(7, &json!({"type":"result","shot_uuid":event.message["shot_uuid"],"accepted":true})).await?;
                 }
             }
         }

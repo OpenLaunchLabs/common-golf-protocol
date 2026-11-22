@@ -26,14 +26,14 @@ static void message(cgp_peer *p,uint32_t ch,const char *json,size_t length,void 
 }
 int main(void){
     app server={.server=true},client={0};
-    cgp_options o={.role=CGP_LAUNCH_MONITOR,.draft=CGP_DRAFT_2,.listener=true,.name="queue regression",.callbacks={.connected=connected,.message=message,.tick=tick},.user=&server};
-    inet_pton(AF_INET,"127.0.0.1",&o.local_ip);cgp_engine *listener=cgp_create_options(&o);assert(listener);
-    o.listener=false;o.role=CGP_SIMULATOR;o.user=&client;cgp_engine *connector=cgp_create_options(&o);assert(connector);
-    struct sockaddr_in addr={.sin_family=AF_INET,.sin_addr=o.local_ip,.sin_port=htons(cgp_port(listener))};assert(cgp_connect(connector,&addr,"queue regression"));
+    cgp_options o={.role=CGP_LAUNCH_MONITOR,.draft=CGP_DRAFT_2,.is_server=true,.name="queue regression",.callbacks={.connected=connected,.message=message,.tick=tick},.user=&server};
+    inet_pton(AF_INET,"127.0.0.1",&o.local_ip);cgp_engine *server_engine=cgp_create_options(&o);assert(server_engine);
+    o.is_server=false;o.role=CGP_SIMULATOR;o.user=&client;cgp_engine *client_engine=cgp_create_options(&o);assert(client_engine);
+    struct sockaddr_in addr={.sin_family=AF_INET,.sin_addr=o.local_ip,.sin_port=htons(cgp_port(server_engine))};assert(cgp_connect(client_engine,&addr,"queue regression"));
     uint64_t deadline=cgp_now_ns()+15000000000ULL;
-    while(cgp_now_ns()<deadline && (!server.recovered || client.received<server.written)){cgp_poll(listener);cgp_poll(connector);usleep(1000);}
+    while(cgp_now_ns()<deadline && (!server.recovered || client.received<server.written)){cgp_poll(server_engine);cgp_poll(client_engine);usleep(1000);}
     assert(server.full && server.recovered && client.received==server.written);
-    for(unsigned i=0;i<100;++i){cgp_poll(listener);cgp_poll(connector);usleep(1000);}
+    for(unsigned i=0;i<100;++i){cgp_poll(server_engine);cgp_poll(client_engine);usleep(1000);}
     assert(server.peer->queued==0);assert(!server.peer->failed && !client.peer->failed);
-    cgp_destroy(connector);cgp_destroy(listener);return 0;
+    cgp_destroy(client_engine);cgp_destroy(server_engine);return 0;
 }

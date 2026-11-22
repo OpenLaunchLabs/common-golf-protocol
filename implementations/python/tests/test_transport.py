@@ -61,14 +61,14 @@ def test_channel_failures_are_stream_local_and_connections_independent(tmp_path)
                     .not_valid_after(datetime.datetime(2001, 1, 1)).sign(key, None))
             ident.cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         peers = []
-        server = await serve("127.0.0.1", 0, configuration=identity.configuration(is_client=False),
-                             create_protocol=partial(Recorder, role="sim", peers=peers))
+        server = await serve("127.0.0.1", 0, configuration=identity.configuration(is_client=False, draft=2),
+                             create_protocol=partial(Recorder, role="sim", draft=2, peers=peers))
         port = server._transport.get_extra_info("sockname")[1]
         try:
-            async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True),
-                               create_protocol=partial(Recorder, role="device")) as a:
-                async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True),
-                                   create_protocol=partial(Recorder, role="device")) as b:
+            async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True, draft=2),
+                               create_protocol=partial(Recorder, role="device", draft=2)) as a:
+                async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True, draft=2),
+                                   create_protocol=partial(Recorder, role="device", draft=2)) as b:
                     a.publish(1, SHOT)
                     b.publish(1, SHOT)
                     await until(lambda: len(peers) == 2 and all(any(ch == 1 for ch, _ in p.messages) for p in peers))
@@ -143,11 +143,11 @@ def test_duplicate_stop_sending_is_idempotent_over_real_quic(tmp_path, sdk):
         loop = asyncio.get_running_loop()
         original_handler = loop.get_exception_handler()
         loop.set_exception_handler(lambda _, context: errors.append(context))
-        server = await serve("127.0.0.1", 0, configuration=server_id.configuration(is_client=False), create_protocol=RepeatedStop)
+        server = await serve("127.0.0.1", 0, configuration=server_id.configuration(is_client=False, draft=2), create_protocol=RepeatedStop)
         try:
-            factory = partial(ResendOnDecline, role="device") if sdk else PlainProbe
+            factory = partial(ResendOnDecline, role="device", draft=2) if sdk else PlainProbe
             async with connect("127.0.0.1", server._transport.get_extra_info("sockname")[1],
-                               configuration=client_id.configuration(is_client=True), create_protocol=factory) as client:
+                               configuration=client_id.configuration(is_client=True, draft=2), create_protocol=factory) as client:
                 if not sdk:
                     sid = client._quic.get_next_available_stream_id(is_unidirectional=True)
                     client._quic.send_stream_data(sid, b"probe")
@@ -171,12 +171,12 @@ def test_runtime_delivers_json_without_schema_conformance(tmp_path):
         identity = Identity(tmp_path / "server")
         client_identity = Identity(tmp_path / "client")
         peers = []
-        server = await serve("127.0.0.1", 0, configuration=identity.configuration(is_client=False),
-                             create_protocol=partial(Recorder, role="sim", peers=peers))
+        server = await serve("127.0.0.1", 0, configuration=identity.configuration(is_client=False, draft=2),
+                             create_protocol=partial(Recorder, role="sim", draft=2, peers=peers))
         try:
             port = server._transport.get_extra_info("sockname")[1]
-            async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True),
-                               create_protocol=partial(Recorder, role="device")) as sender:
+            async with connect("127.0.0.1", port, configuration=client_identity.configuration(is_client=True, draft=2),
+                               create_protocol=partial(Recorder, role="device", draft=2)) as sender:
                 messages = [{}, {"type": "shot", "ball_speed_meters_per_second": -1},
                             {"type": "shot", "estimated": ["missing"], "future": {"x": True}}]
                 for message in messages:

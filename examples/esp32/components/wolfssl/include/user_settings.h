@@ -6,6 +6,8 @@
 /* One deliberately narrow TLS build shared by ESP32 and the native harness. */
 #define WOLFSSL_TLS13
 #define WOLFSSL_QUIC
+/* TLS extension buffers need not align integer fields. */
+#define WOLFSSL_USE_ALIGN
 #define HAVE_TLS_EXTENSIONS
 #define HAVE_SUPPORTED_CURVES
 #define HAVE_HKDF
@@ -13,6 +15,7 @@
 #define WOLFSSL_AES_DIRECT
 #define WOLFSSL_AES_COUNTER
 #define HAVE_AES_ECB
+#define HAVE_RPK
 #define HAVE_ALPN
 #define HAVE_SESSION_TICKET
 /* TLS 1.3 permits ticket nonces up to 255 bytes (rustls emits 32). */

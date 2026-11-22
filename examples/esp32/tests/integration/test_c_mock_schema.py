@@ -7,17 +7,25 @@ from pathlib import Path
 import subprocess
 
 import jsonschema
+import pytest
 
 
-def test_c_mock_messages_match_schemas(mock_samples):
+@pytest.mark.parametrize("draft", [None, 1, 2, 3])
+def test_c_mock_messages_match_schemas(mock_samples, draft):
+    arguments = [str(mock_samples)] + ([] if draft is None else [str(draft)])
+    draft = 3 if draft is None else draft
     schemas = Path(__file__).resolve().parents[4] / "schema"
+    if draft < 3:
+        schemas /= f"draft-{draft}"
     names = {0: "info", 1: "shot", 3: "club", 4: "status", 5: "control",
              6: "state", 7: "result", 8: "flight"}
+    if draft == 3:
+        names.update({4: "device_status", 6: "simulator_state"})
     validators = {
         channel: jsonschema.Draft202012Validator(json.loads((schemas / f"{name}.json").read_text()))
         for channel, name in names.items()
     }
-    result = subprocess.run([str(mock_samples)], check=True, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(arguments, check=True, capture_output=True, text=True, timeout=30)
     counts = {channel: 0 for channel in names}
     commands = set()
     for line in result.stdout.splitlines():
@@ -26,7 +34,7 @@ def test_c_mock_messages_match_schemas(mock_samples):
         message = json.loads(payload)
         validators[channel].validate(message)
         counts[channel] += 1
-        if channel in (1, 3):
+        if draft >= 2 and channel in (1, 3):
             synthetic_numbers = {key for key, value in message.items()
                                  if type(value) in (int, float) and key != "shot_number"}
             assert set(message["estimated"]) == synthetic_numbers

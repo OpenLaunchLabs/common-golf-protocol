@@ -6,6 +6,11 @@ import enum
 import json
 import math
 import struct
+import secrets
+import time
+import uuid
+import re
+import datetime
 
 MAX_MESSAGE_BYTES = 65535
 NOT_INTERESTED = 1
@@ -14,12 +19,13 @@ SERVICE = "_common-golf._udp.local."
 CHANNELS = {"info": 0, "shot": 1, "open_connect": 2, "club": 3, "status": 4,
             "control": 5, "state": 6, "result": 7, "flight": 8}
 NAMES = {v: k for k, v in CHANNELS.items()}
-VERSIONS = {"0.1.0": 1, "0.1.1": 1, "0.2.0": 2}
+VERSIONS = {"0.1.0": 1, "0.1.1": 1, "0.2.0": 2, "0.3.0": 3}
 
 
 class Draft(enum.IntEnum):
     ONE = 1
     TWO = 2
+    THREE = 3
 
     @property
     def alpn(self):
@@ -27,7 +33,7 @@ class Draft(enum.IntEnum):
 
     @property
     def version(self):
-        return {1: "0.1.1", 2: "0.2.0"}[self.value]
+        return {1: "0.1.1", 2: "0.2.0", 3: "0.3.0"}[self.value]
 
     @classmethod
     def for_version(cls, version):
@@ -165,9 +171,46 @@ class Snapshots:
     def receive(self, channel, message, *, stream_open=False):
         if channel in (4, 6):
             self.state[channel] = apply_patch({} if stream_open else self.state.get(channel, {}), message)
-        elif channel in (1, 3, 8):
+        elif channel in (1, 3, 8) or (channel == 7 and "shot_uuid" in message):
+            if "shot_uuid" in message:
+                validate_shot_uuid(message["shot_uuid"])
+                self.shots[(channel, "uuid", message["shot_uuid"])] = copy.deepcopy(message)
+                return copy.deepcopy(message)
             key = (channel, "shot", message.get("shot_number"))
             if key[2] is None:
                 key = (channel, "swing", message.get("swing_number"))
             self.shots[key] = copy.deepcopy(message)
         return copy.deepcopy(message)
+
+
+def new_shot_uuid():
+    """Create a UUIDv7 once at the measurement source; retain it with the event."""
+    milliseconds = time.time_ns() // 1_000_000
+    bits = ((milliseconds & ((1 << 48) - 1)) << 80) | (7 << 76)
+    bits |= secrets.randbits(12) << 64 | (2 << 62) | secrets.randbits(62)
+    return str(uuid.UUID(int=bits))
+
+
+def validate_shot_uuid(value):
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value) is None:
+        raise ProtocolError("shot_uuid must be canonical UUIDv7")
+
+
+def validate_draft3_message(channel, message):
+    if channel in (1, 7, 8) and "shot_uuid" not in message:
+        raise ProtocolError("shot_uuid is required")
+    if channel in (1, 3, 7, 8) and "shot_uuid" in message:
+        validate_shot_uuid(message["shot_uuid"])
+    if channel in (1, 3, 7, 8) and "measured_at" in message:
+        value = message["measured_at"]
+        match = (re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(?:[Zz]|\+00:00)", value)
+                 if isinstance(value, str) else None)
+        if match is None:
+            raise ProtocolError("measured_at must be a UTC RFC 3339 timestamp")
+        year, month, day, hour, minute, second = map(int, match.groups())
+        try:
+            datetime.date(year, month, day)
+            if hour > 23 or minute > 59 or second > 60 or (second == 60 and (hour, minute) != (23, 59)):
+                raise ValueError("invalid time")
+        except ValueError as exc:
+            raise ProtocolError("measured_at must be a UTC RFC 3339 timestamp") from exc

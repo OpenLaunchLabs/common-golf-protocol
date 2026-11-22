@@ -8,14 +8,14 @@ async fn native_c_consumer_exchanges_quic_and_rejects_wrong_pin() {
     let executable = std::env::var("CGP_C_EXAMPLE").expect("set CGP_C_EXAMPLE");
     let identity = Identity::generate().unwrap();
     let endpoint = noq::Endpoint::server(
-        identity.server_config(&[Draft::Two]).unwrap(),
+        identity.server_config(&[Draft::Three]).unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     )
     .unwrap();
     let device = common_golf_protocol::discovery::Discovered {
         name: "test".into(),
         addresses: vec![endpoint.local_addr().unwrap()],
-        properties: HashMap::new(),
+        properties: HashMap::from([("key".into(), identity.fingerprint())]),
     };
     let descriptor = serde_json::to_string(&device).unwrap();
     let server = tokio::spawn(async move {
@@ -28,19 +28,20 @@ async fn native_c_consumer_exchanges_quic_and_rejects_wrong_pin() {
             send.write_all(&channel.to_be_bytes()).await.unwrap();
             assert_eq!(send.stopped().await.unwrap().unwrap(), 1u32.into());
         }
-        let mut peer = Peer::new(
+        let mut peer = Peer::with_contracts(
             connection,
             Role::Device,
-            serde_json::json!({"type":"info", "name":"test"}),
+            serde_json::json!({"type":"info", "protocol_version":"0.3.0", "name":"test"}),
             Default::default(),
+            None,
         )
         .await
         .unwrap();
         loop {
             let event = peer.incoming.recv().await.unwrap();
             if event.channel == 6 {
-                assert_eq!(event.message["type"], "state");
-                peer.send(4, &serde_json::json!({"type":"status"}))
+                assert_eq!(event.message["type"], "simulator_state");
+                peer.send(4, &serde_json::json!({"type":"device_status"}))
                     .await
                     .unwrap();
                 tokio::time::sleep(Duration::from_millis(500)).await;
